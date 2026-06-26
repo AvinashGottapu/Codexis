@@ -19,31 +19,52 @@ Codexis is a real-time, secure, and distributed Online Judge platform (similar t
 
 ```mermaid
 graph TD
-    Client[React Frontend - port 5173] -->|Auth JWT| SubmissionService[Submission Service - port 3003]
-    Client -->|Socket.io Conn| SocketService[Socket Service - port 3004]
-    Client -->|Auth Redirect| Clerk[Clerk Auth Cloud]
+    %% Define main layers/subgraphs for visual layout
+    subgraph ClientLayer ["1. Client & Auth (Frontend)"]
+        Client["React Frontend (Port 5173)"]
+        Clerk["Clerk Auth Cloud"]
+    end
+
+    subgraph ServiceLayer ["2. Microservices & API Gateways"]
+        SubmissionService["Submission Service (Port 3003)"]
+        UserService["User Service (Port 3005)"]
+        SocketService["Socket Service (Port 3004)"]
+    end
+
+    subgraph BrokerLayer ["3. Message Broker & Event Bus"]
+        RedisQueues["Redis: run-queue & submit-queue"]
+        RedisPubSub["Redis Pub/Sub Channel"]
+    end
+
+    subgraph EvalLayer ["4. Execution Sandbox (Isolated)"]
+        Evaluator["Evaluator Service (Port 3002)"]
+        DockerSandbox["Docker Sandbox Container"]
+    end
+
+    subgraph DBLayer ["5. Database Engines (Decoupled)"]
+        ProblemsDB[("Problems DB (Port 5432)")]
+        UserDB[("User & Submission DB (Port 5433)")]
+    end
+
+    %% Chronological execution flow connections
+    Client -->|1. Redirect| Clerk
+    Client -->|2. HTTP POST Submission| SubmissionService
+    Client <--->|3. WebSocket Connection| SocketService
     
-    Clerk -->|Webhook Sync| UserService[User Service - port 3005]
+    Clerk -->|4. SVIX Webhook Sync| UserService
     
-    SubmissionService -->|Prisma| UserDB[(User/Submission DB - port 5433)]
     UserService -->|Prisma| UserDB
+    SubmissionService -->|Prisma| UserDB
+
+    SubmissionService -->|5. Enqueue Job| RedisQueues
+    RedisQueues -.->|6. Poll Job| Evaluator
     
-    SubmissionService -->|Enqueue Run Job| RunQueue[Redis: run-queue]
-    SubmissionService -->|Enqueue Submit Job| SubmitQueue[Redis: submit-queue]
+    Evaluator -->|7. Read Testcases| ProblemsDB
+    Evaluator -->|8. Execute Sandbox| DockerSandbox
     
-    EvaluatorService[Evaluator Service - port 3002] -->|Poll Jobs| RunQueue
-    EvaluatorService -->|Poll Jobs| SubmitQueue
-    
-    EvaluatorService -->|Prisma| ProblemsDB[(Problems DB - port 5432)]
-    
-    EvaluatorService -->|Execute Code| Sandbox[Docker Sandbox Container]
-    
-    EvaluatorService -->|Publish Status| RedisPubSub((Redis Pub/Sub channel))
-    SocketService -->|Subscribe| RedisPubSub
-    SocketService -->|Emit Real-time Status| Client
-    
-    SubmissionService -->|Subscribe| RedisPubSub
-    RedisPubSub -->|Update Status| SubmissionService
+    Evaluator -->|9. Publish Update| RedisPubSub
+    RedisPubSub -.->|10. Relay Update| SocketService
+    RedisPubSub -.->|10. Sync Status| SubmissionService
 ```
 
 ---
