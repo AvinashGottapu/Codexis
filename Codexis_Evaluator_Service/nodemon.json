@@ -1,0 +1,8 @@
+{
+  "ignore": [
+    "temp-submissions/",
+    "temp-submissions/*",
+    "temp-submissions/**/*",
+    "**/temp-submissions/**"
+  ]
+}

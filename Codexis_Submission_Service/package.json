@@ -1,0 +1,27 @@
+{
+  "name": "codexis-submission-service",
+  "version": "1.0.0",
+  "description": "Submission Service for Codexis",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev"
+  },
+  "dependencies": {
+    "@clerk/backend": "^3.8.4",
+    "@fastify/cors": "^9.0.1",
+    "@prisma/client": "^5.14.0",
+    "bullmq": "^5.8.0",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.27.0",
+    "ioredis": "^5.4.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0",
+    "prisma": "^5.14.0"
+  }
+}

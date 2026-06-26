@@ -1,0 +1,25 @@
+{
+  "name": "codexis-user-service",
+  "version": "1.0.0",
+  "description": "User Profile and Auth Sync Service for Codexis",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma db push"
+  },
+  "dependencies": {
+    "@clerk/backend": "^1.1.5",
+    "@prisma/client": "^5.14.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "svix": "^1.24.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0",
+    "prisma": "^5.14.0"
+  }
+}

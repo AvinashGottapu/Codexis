@@ -1,0 +1,51 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Problem {
+  id           String     @id @default(uuid())
+  title        String
+  description  String
+  difficulty   String     // "Easy", "Medium", "Hard"
+  tags         String     // Comma separated tags
+  companies    String?    // Comma separated companies
+  timeLimit    Int        @default(2000) // in ms
+  memoryLimit  Int        @default(256)  // in MB
+  
+  testcases    testcase[]
+  codeSnippets codeSubs[]
+  solutions    solution[]
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model testcase {
+  id             String   @id @default(uuid())
+  problemId      String
+  problem        Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  input          String
+  expectedOutput String
+  isSample       Boolean  @default(false)
+}
+
+model codeSubs {
+  id           String   @id @default(uuid())
+  problemId    String
+  problem      Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  language     String   // "python", "javascript", "cpp", "java"
+  codeTemplate String
+}
+
+model solution {
+  id           String   @id @default(uuid())
+  problemId    String
+  problem      Problem  @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  language     String   // "python", "javascript", "cpp", "java"
+  solutionCode String
+}

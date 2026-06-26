@@ -1,0 +1,31 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id          String       @id // Matches Clerk's User ID (e.g. user_2NxF...)
+  email       String       @unique
+  username    String       @unique
+  imageUrl    String?      // Sync profile picture URL from Clerk
+  submissions Submission[]
+  createdAt   DateTime     @default(now())
+}
+
+model Submission {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId       String   // Logical link only
+  code            String
+  language        String   // "python", "javascript", "cpp", "java"
+  status          String   // "PENDING", "RUNNING", "ACCEPTED", "WRONG_ANSWER", "TIME_LIMIT_EXCEEDED", "MEMORY_LIMIT_EXCEEDED", "RUNTIME_ERROR", "COMPILATION_ERROR"
+  executionTime   Int?     // in ms
+  executionMemory Int?     // in KB
+  errorDetails    String?
+  createdAt       DateTime @default(now())
+}
