@@ -1,71 +1,58 @@
 # Codexis: Distributed Microservices Online Judge Platform
 
-Codexis is a real-time, secure, and distributed Online Judge platform (similar to LeetCode) built using a microservices architecture. It evaluates and compiles untrusted user code safely inside isolated Docker sandbox containers and streams execution progress in real time via WebSockets.
+Codexis is a real-time, secure, and distributed Online Judge platform (similar to LeetCode or CodeWar) built using a microservices architecture. It evaluates and compiles untrusted user code safely inside isolated Docker sandbox containers and streams execution progress in real time via WebSockets.
+
+Codexis follows a microservices architecture with the following core services:
+
+* **Submission Service**: Handles user code runs and final submissions.
+* **Evaluator Service**: Polls jobs from Redis queues, pulls problem details, and runs execution sandboxes.
+* **Socket Service**: Manages WebSocket connections to relay job updates to the client in real-time.
+* **User Service**: Synchronizes user accounts and manages profiles.
+* **Problem Admin Service**: Handles administration of coding problems and test cases.
 
 ---
 
-## 🚀 Key Features
-
-* **Real-time Evaluation Logging**: Status updates (`PENDING`, `RUNNING`, `ACCEPTED`, `WRONG_ANSWER`, etc.) are streamed instantly to the browser using Socket.io.
-* **Secure Code Sandboxing**: Spawns isolated Docker containers with strict memory limits and execution timeouts to prevent host system damage.
-* **Dual Database Split**: Separates read-heavy problems metadata (`postgres_static` on port `5432`) from write-heavy users/submissions data (`postgres_user` on port `5433`).
-* **Dual-Queue Execution Model**: decoples and processes trial runs (runs only sample test cases in-memory, bypassing database writes) and final submissions (runs all test cases, persists solution state) via Redis and BullMQ.
-* **Third-Party Authentication**: Integrates secure authentication using Clerk, automatically synchronizing user data via real-time SVIX Webhooks.
-* **BullMQ Dashboard**: Visualizes execution queues (`run-queue` and `submit-queue`) in real-time.
-
----
-
-## 🛠️ System Architecture
+## System Flow Diagram
 
 ```mermaid
-graph TD
-    %% Define main layers/subgraphs for visual layout
-    subgraph ClientLayer ["1. Client & Auth (Frontend)"]
-        Client["React Frontend (Port 5173)"]
-        Clerk["Clerk Auth Cloud"]
-    end
+graph LR
+    Client["Client (Vite React)"]
+    WebSocket["Web Socket Server"]
+    SubServer["Submission Server"]
+    SubDB[("Submission DB")]
+    Broker["Message Broker (Redis)"]
+    Evaluator["Evaluator Service"]
+    Sandbox["Docker Sandbox"]
+    StaticDB[("Static DB (Problems)")]
 
-    subgraph ServiceLayer ["2. Microservices & API Gateways"]
-        SubmissionService["Submission Service (Port 3003)"]
-        UserService["User Service (Port 3005)"]
-        SocketService["Socket Service (Port 3004)"]
-    end
-
-    subgraph BrokerLayer ["3. Message Broker & Event Bus"]
-        RedisQueues["Redis: run-queue & submit-queue"]
-        RedisPubSub["Redis Pub/Sub Channel"]
-    end
-
-    subgraph EvalLayer ["4. Execution Sandbox (Isolated)"]
-        Evaluator["Evaluator Service (Port 3002)"]
-        DockerSandbox["Docker Sandbox Container"]
-    end
-
-    subgraph DBLayer ["5. Database Engines (Decoupled)"]
-        ProblemsDB[("Problems DB (Port 5432)")]
-        UserDB[("User & Submission DB (Port 5433)")]
-    end
-
-    %% Chronological execution flow connections
-    Client -->|1. Redirect| Clerk
-    Client -->|2. HTTP POST Submission| SubmissionService
-    Client <--->|3. WebSocket Connection| SocketService
-    
-    Clerk -->|4. SVIX Webhook Sync| UserService
-    
-    UserService -->|Prisma| UserDB
-    SubmissionService -->|Prisma| UserDB
-
-    SubmissionService -->|5. Enqueue Job| RedisQueues
-    RedisQueues -.->|6. Poll Job| Evaluator
-    
-    Evaluator -->|7. Read Testcases| ProblemsDB
-    Evaluator -->|8. Execute Sandbox| DockerSandbox
-    
-    Evaluator -->|9. Publish Update| RedisPubSub
-    RedisPubSub -.->|10. Relay Update| SocketService
-    RedisPubSub -.->|10. Sync Status| SubmissionService
+    %% Chronological Flow
+    Client -->|1. Submit Code| SubServer
+    SubServer -->|2. Store Submission| SubDB
+    SubServer -->|3. Return Submission ID| Client
+    SubServer -->|4. Push Job to Queue| Broker
+    Broker -.->|5. Poll Job| Evaluator
+    Evaluator -->|6. Fetch Testcases| StaticDB
+    Evaluator -->|7. Run Code in Container| Sandbox
+    Evaluator -->|8. Publish Result| Broker
+    Broker -.->|9. Notify Result| WebSocket
+    Broker -.->|9. Sync Result Status| SubServer
+    WebSocket -->|10. Stream Status Update| Client
 ```
+
+The above diagram illustrates the complete flow of how services interact:
+
+1. **Client** submits code solution to **Submission Server**.
+2. **Submission Server** stores the submission metadata and sets the initial status to `PENDING` in the **Submission DB** (skipped for in-memory trials/run-only executions).
+3. **Submission Server** returns the generated unique **Submission ID** back to the **Client** immediately.
+4. **Submission Server** pushes the job payload containing the code and metadata to the **Message Broker (Redis Queue)**.
+5. **Evaluator Service** polls and picks up the job from the queue.
+6. **Evaluator Service** queries the **Static DB** to fetch the problem's time limits, memory limits, and test cases.
+7. **Evaluator Service** executes the code against the test cases inside a secure, isolated **Docker Sandbox container**.
+8. **Evaluator Service** publishes the execution outcomes (pass/fail status, execution time, memory usage, error logs) back to the **Message Broker (Redis Pub/Sub)**.
+9. **Message Broker** broadcasts the results:
+   * It notifies the **Web Socket Server** about the completion state.
+   * It notifies the **Submission Server** which updates the final status in the **Submission DB**.
+10. **Web Socket Server** streams the execution status update in real-time back to the **Client**.
 
 ---
 
@@ -78,8 +65,8 @@ Make sure you have the following installed:
 
 ---
 
-### Step 1: Clone and Spin Up Databases & Redis (Docker)
-We use Docker Compose to spin up our multi-database architecture and Redis message broker.
+### Step 1: Spin Up Databases & Redis (Docker)
+We use Docker Compose to spin up our database systems and Redis message broker.
 
 Run the following command at the root directory of the project:
 ```bash
@@ -88,12 +75,7 @@ docker-compose up -d
 This starts:
 1. `postgres_static` on port `5432` (Problems DB)
 2. `postgres_user` on port `5433` (Users/Submissions DB)
-3. `redis` on port `6379` (BullMQ Message Broker)
-
-To check if the containers are running:
-```bash
-docker ps
-```
+3. `redis` on port `6379` (BullMQ Message Broker / Pub/Sub)
 
 ---
 
@@ -112,7 +94,7 @@ docker ps
    npm install
    npx prisma db push
    ```
-3. **Setup the User Profile Database Sync** (`Codexis_User_Service`):
+3. **Setup the User Database** (`Codexis_User_Service`):
    ```bash
    cd ../Codexis_User_Service
    npm install
@@ -123,22 +105,22 @@ docker ps
 
 ### Step 3: Run the Microservices
 
-You need to run the backend microservices and the frontend dev server. Run `npm install` and `npm run dev` in each of their directories:
+Navigate into each directory, run `npm install`, and start the service in development mode:
 
-| Directory | Service Name | Default Port | Description |
+| Directory | Service Name | Port | Description |
 | :--- | :--- | :--- | :--- |
-| `Codexis_Problem_Admin_Service` | Problem Admin API | `3001` | Handles problems metadata. |
-| `Codexis_Evaluator_Service` | Code Evaluator / Workers | `3002` | Runs BullMQ workers and sandboxes. |
-| `Codexis_Submission_Service` | Submission API Gateway | `3003` | Receives runs and final submissions. |
-| `Codexis_Socket_Service` | WebSocket Broker | `3004` | Streams real-time execution updates. |
-| `Codexis_User_Service` | User Management API | `3005` | Syncs profile events via Clerk webhooks. |
-| `frontend` | Vite + React Application | `5173` | The main user coding IDE dashboard. |
+| `Codexis_Problem_Admin_Service` | Problem Admin API | `3001` | Manages problem statements & test cases. |
+| `Codexis_Evaluator_Service` | Code Evaluator / Workers | `3002` | Runs BullMQ workers and sandbox managers. |
+| `Codexis_Submission_Service` | Submission API Gateway | `3003` | Entry point for run & submit code calls. |
+| `Codexis_Socket_Service` | WebSocket Service | `3004` | Handles client connection rooms for streaming. |
+| `Codexis_User_Service` | User Management API | `3005` | Syncs user accounts. |
+| `frontend` | React UI | `5173` | Code editor and submissions history panel. |
 
 ---
 
-## 🔒 Security & Code Sandbox Details
+## 🔒 Sandbox Security Constraints
 
-The platform secures the host machine by compiling and executing code inside runtimes with:
-* **Time limits**: Configured dynamically per problem (default: `2000ms`).
-* **Memory constraints**: Docker limits the RAM available to each child container.
-* **Strict Network isolation**: Sandbox containers are launched with network access disabled (`network: none`) to prevent malicious outbound internet calls.
+Untrusted user code runs in isolated environments with:
+* **Execution Timeouts**: Stops infinite loops (e.g. `while(true)`) automatically based on problem configuration.
+* **Memory Limits**: Restricts memory usage to prevent system exhaustion.
+* **Network Isolation**: Sandbox containers have network capabilities disabled (`network: none`) to prevent outbound communication.
