@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 import * as problemModel from '../models/problem.model.js';
+import { redis } from '../config/redis.js';
 
 // Zod schemas for request body validation
 const testcaseSchema = z.object({
@@ -50,12 +51,36 @@ const renderDescription = (markdown) => {
   });
 };
 
+// Caching configuration values (in seconds)
+const ALL_PROBLEMS_TTL = 3600;      // 1 hour
+const SINGLE_PROBLEM_TTL = 86400;   // 24 hours
+
 /**
  * GET all problems (basic metadata only)
+ * Cache-Aside with Sliding Expiration
  */
 export const getallProblems = async (req, res) => {
+  const cacheKey = 'cache:problems:all';
   try {
+    // 1. Check Redis Cache
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      console.log('[Cache] HIT - getallProblems');
+      
+      // Sliding Expiration: Reset the TTL back to 1 hour upon access
+      await redis.expire(cacheKey, ALL_PROBLEMS_TTL);
+      
+      return res.json(JSON.parse(cachedData));
+    }
+
+    console.log('[Cache] MISS - getallProblems. Fetching from database...');
+    // 2. Fetch from Postgres
     const problems = await problemModel.getAllProblems();
+    
+    // 3. Save to Redis Cache
+    await redis.setex(cacheKey, ALL_PROBLEMS_TTL, JSON.stringify(problems));
+    // Stringify Bcz Redis can only store the strings...
+
     return res.json(problems);
   } catch (error) {
     console.error('Controller Error - getProblems:', error);
@@ -65,10 +90,25 @@ export const getallProblems = async (req, res) => {
 
 /**
  * GET detailed problem by ID (including rendered HTML description)
+ * Cache-Aside with Sliding Expiration
  */
 export const getProblem = async (req, res) => {
   const { id } = req.params;
+  const cacheKey = `cache:problem:${id}`;
   try {
+    // 1. Check Redis Cache
+    const cachedData = await redis.get(cacheKey);
+    if (cachedData) {
+      console.log(`[Cache] HIT - getProblem:${id}`);
+      
+      // Sliding Expiration: Reset the TTL back to 24 hours upon access
+      await redis.expire(cacheKey, SINGLE_PROBLEM_TTL);
+      
+      return res.json(JSON.parse(cachedData));
+    }
+
+    console.log(`[Cache] MISS - getProblem:${id}. Fetching from database...`);
+    // 2. Fetch from Postgres
     const problem = await problemModel.getProblemById(id);
     if (!problem) {
       return res.status(404).json({ error: 'Problem not found' });
@@ -76,11 +116,15 @@ export const getProblem = async (req, res) => {
 
     // Convert Markdown description to sanitized HTML
     const renderedDescription = renderDescription(problem.description);
-
-    return res.json({
+    const problemDetails = {
       ...problem,
       renderedDescription,
-    });
+    };
+
+    // 3. Save to Redis Cache
+    await redis.setex(cacheKey, SINGLE_PROBLEM_TTL, JSON.stringify(problemDetails));
+
+    return res.json(problemDetails);
   } catch (error) {
     console.error('Controller Error - getProblem:', error);
     return res.status(500).json({ error: 'Failed to fetch problem details' });
@@ -89,6 +133,7 @@ export const getProblem = async (req, res) => {
 
 /**
  * POST create a new problem
+ * Active Cache Invalidation: Invalidate all problems cache
  */
 export const createProblem = async (req, res) => {
   try {
@@ -97,6 +142,11 @@ export const createProblem = async (req, res) => {
     
     // Call model to insert
     const newProblem = await problemModel.createProblem(validatedData);
+
+    // Active Cache Invalidation: Delete the cached list of all problems
+    await redis.del('cache:problems:all');
+    console.log('[Cache] INVALIDATED - cache:problems:all (New problem created)');
+
     return res.status(201).json(newProblem);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -109,6 +159,7 @@ export const createProblem = async (req, res) => {
 
 /**
  * PUT update an existing problem
+ * Active Cache Invalidation: Delete both the problem list cache and individual problem cache
  */
 export const updateProblem = async (req, res) => {
   const { id } = req.params;
@@ -118,6 +169,12 @@ export const updateProblem = async (req, res) => {
     
     // Call model to update
     const updated = await problemModel.updateProblem(id, validatedData);
+
+    // Active Cache Invalidation: Clear relevant caches so users see the updates instantly
+    await redis.del('cache:problems:all');
+    await redis.del(`cache:problem:${id}`);
+    console.log(`[Cache] INVALIDATED - cache:problems:all and cache:problem:${id} (Problem updated)`);
+
     return res.json(updated);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -130,11 +187,18 @@ export const updateProblem = async (req, res) => {
 
 /**
  * DELETE a problem by ID
+ * Active Cache Invalidation: Delete both cache keys
  */
 export const removeProblem = async (req, res) => {
   const { id } = req.params;
   try {
     await problemModel.deleteProblem(id);
+
+    // Active Cache Invalidation: Delete from cache
+    await redis.del('cache:problems:all');
+    await redis.del(`cache:problem:${id}`);
+    console.log(`[Cache] INVALIDATED - cache:problems:all and cache:problem:${id} (Problem deleted)`);
+
     return res.json({ message: 'Problem deleted successfully' });
   } catch (error) {
     console.error('Controller Error - remove:', error);
