@@ -36,6 +36,17 @@ services:
       - redis_data:/data
     restart: always
 
+  api_gateway:
+    image: nginx:1.25-alpine
+    container_name: codexis-api-gateway
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api-gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: always
+
 volumes:
   postgres_static_data:
   postgres_user_data:

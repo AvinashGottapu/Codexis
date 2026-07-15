@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton, useAuth, useUser } from '@clerk/clerk-react';
 
+const GATEWAY_URL = 'http://localhost:8000';
+
 const DEFAULT_STARTERS = {
   javascript: `// JavaScript Starter Template
 // Read input from standard input if needed.
@@ -110,9 +112,9 @@ export default function App() {
   const checkHealth = async () => {
     setServicesHealth({ admin: 'loading', submission: 'loading', socket: 'loading', user: 'loading' });
     
-    // Admin Service
+    // Admin Service (Problems)
     try {
-      const res = await fetch('http://localhost:3001/health');
+      const res = await fetch(`${GATEWAY_URL}/health/problems`);
       setServicesHealth(prev => ({ ...prev, admin: res.ok ? 'online' : 'offline' }));
     } catch {
       setServicesHealth(prev => ({ ...prev, admin: 'offline' }));
@@ -120,7 +122,7 @@ export default function App() {
 
     // Submission Service
     try {
-      const res = await fetch('http://localhost:3003/health');
+      const res = await fetch(`${GATEWAY_URL}/health/submissions`);
       setServicesHealth(prev => ({ ...prev, submission: res.ok ? 'online' : 'offline' }));
     } catch {
       setServicesHealth(prev => ({ ...prev, submission: 'offline' }));
@@ -128,7 +130,7 @@ export default function App() {
 
     // Socket Service
     try {
-      const res = await fetch('http://localhost:3004/health');
+      const res = await fetch(`${GATEWAY_URL}/health/socket`);
       setServicesHealth(prev => ({ ...prev, socket: res.ok ? 'online' : 'offline' }));
     } catch {
       setServicesHealth(prev => ({ ...prev, socket: 'offline' }));
@@ -136,7 +138,7 @@ export default function App() {
 
     // User Service
     try {
-      const res = await fetch('http://localhost:3005/health');
+      const res = await fetch(`${GATEWAY_URL}/health/users`);
       setServicesHealth(prev => ({ ...prev, user: res.ok ? 'online' : 'offline' }));
     } catch {
       setServicesHealth(prev => ({ ...prev, user: 'offline' }));
@@ -151,7 +153,7 @@ export default function App() {
 
   const fetchProblems = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/problems/all');
+      const res = await fetch(`${GATEWAY_URL}/api/problems/all`);
       if (res.ok) {
         const data = await res.json();
         setProblems(data);
@@ -161,7 +163,7 @@ export default function App() {
       }
     } catch (err) {
       console.error('Failed to fetch problems:', err);
-      addLog('System', 'Failed to fetch problems list. Make sure Problem Admin Service is running on port 3001.', 'error');
+      addLog('System', 'Failed to fetch problems list. Make sure the API Gateway is running on port 8000.', 'error');
     }
   };
 
@@ -171,7 +173,7 @@ export default function App() {
     setLoadingSubmissions(true);
     try {
       const token = await getToken();
-      const res = await fetch('http://localhost:3003/api/submissions/history', {
+      const res = await fetch(`${GATEWAY_URL}/api/submissions/history`, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -200,7 +202,7 @@ export default function App() {
 
     const fetchProblemDetail = async () => {
       try {
-        const res = await fetch(`http://localhost:3001/api/problems/get/${selectedProblemId}`);
+        const res = await fetch(`${GATEWAY_URL}/api/problems/get/${selectedProblemId}`);
         if (res.ok) {
           const data = await res.json();
           setProblemDetail(data);
@@ -285,8 +287,8 @@ export default function App() {
         throw new Error('Authentication token could not be retrieved. Please sign in.');
       }
 
-      // POST to Submission Service (Port 3003)
-      const res = await fetch('http://localhost:3003/api/submissions', {
+      // POST to Submission Service via Gateway (Port 8000)
+      const res = await fetch(`${GATEWAY_URL}/api/submissions`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -313,7 +315,7 @@ export default function App() {
       const submission = await res.json();
       const submissionId = submission.id;
       addLog('System', `Submission created! ID: ${submissionId.substring(0, 8)}...`, 'success');
-      addLog('System', 'Connecting to real-time events socket...', 'info');
+      addLog('System', 'Connecting to real-time events socket via API Gateway...', 'info');
 
       // Initialize Socket connection
       setupSocketConnection(submissionId);
@@ -326,8 +328,8 @@ export default function App() {
   };
 
   const setupSocketConnection = (submissionId) => {
-    // Connect to Socket Service (Port 3004)
-    const socket = io('http://localhost:3004', {
+    // Connect to Socket Service via Gateway (Port 8000)
+    const socket = io(GATEWAY_URL, {
       transports: ['websocket'],
     });
 

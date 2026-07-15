@@ -1,5 +1,4 @@
 import express from 'express';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import userRouter from './routes/user.routes.js';
 
@@ -9,7 +8,6 @@ const app = express();
 const PORT = process.env.PORT || 3005;
 
 // Global Middlewares
-app.use(cors({ origin: '*' }));
 
 // Clerk Webhooks require the raw body, so we check if the path is the webhook route before parsing JSON
 app.use((req, res, next) => {

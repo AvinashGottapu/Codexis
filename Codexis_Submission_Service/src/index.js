@@ -1,5 +1,4 @@
 import Fastify from 'fastify';
-import cors from '@fastify/cors';
 import dotenv from 'dotenv';
 import submissionRoutes from './routes/submission.routes.js';
 import { initRedisSubscriber } from './services/redisSubscriber.js';
@@ -7,12 +6,6 @@ import { initRedisSubscriber } from './services/redisSubscriber.js';
 dotenv.config();
 
 const fastify = Fastify({ logger: true });
-
-// Register CORS
-fastify.register(cors, {
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-});
 
 // Register modular routers
 fastify.register(submissionRoutes, { prefix: '/api/submissions' });
