@@ -300,6 +300,11 @@ export default function App() {
         }),
       });
 
+      if (res.status === 429) {
+        const errorData = await res.json();
+        throw new Error(errorData.message || 'Rate limit exceeded. Please wait.');
+      }
+
       if (!res.ok) {
         const errorData = await res.json();
         throw new Error(errorData.error || 'Failed to submit code');
