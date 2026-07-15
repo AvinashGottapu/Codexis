@@ -90,6 +90,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('description');
   const [submissionsHistory, setSubmissionsHistory] = useState([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+  const [leftView, setLeftView] = useState('problems');
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
 
   // Service health states
   const [servicesHealth, setServicesHealth] = useState({
@@ -145,11 +148,19 @@ export default function App() {
     }
   };
 
-  // 2. Fetch problems on mount
+  // 2. Fetch problems and leaderboard on mount
   useEffect(() => {
     checkHealth();
     fetchProblems();
+    fetchLeaderboard();
   }, []);
+
+  // Fetch leaderboard when leftView changes to 'leaderboard'
+  useEffect(() => {
+    if (leftView === 'leaderboard') {
+      fetchLeaderboard();
+    }
+  }, [leftView]);
 
   const fetchProblems = async () => {
     try {
@@ -164,6 +175,22 @@ export default function App() {
     } catch (err) {
       console.error('Failed to fetch problems:', err);
       addLog('System', 'Failed to fetch problems list. Make sure the API Gateway is running on port 8000.', 'error');
+    }
+  };
+
+  const fetchLeaderboard = async () => {
+    setLoadingLeaderboard(true);
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/leaderboard/global`);
+      if (res.ok) {
+        const data = await res.json();
+        setProblems(prev => prev); // dummy trigger
+        setLeaderboard(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch leaderboard:', err);
+    } finally {
+      setLoadingLeaderboard(false);
     }
   };
 
@@ -366,6 +393,9 @@ export default function App() {
           if (executionMemory !== undefined) {
             addLog('Evaluator', `Mock Memory Usage: ${(executionMemory / 1024).toFixed(2)} MB`, 'success');
           }
+          // Refresh user history and leaderboard rankings
+          fetchSubmissionsHistory();
+          fetchLeaderboard();
         } else if (status === 'WRONG_ANSWER') {
           addLog('Evaluator', 'FAILED: Incorrect outputs detected. Status: WRONG_ANSWER ❌', 'error');
           if (errorDetails) {
@@ -497,55 +527,144 @@ export default function App() {
       {/* MAIN CONTAINER */}
       <main className="flex flex-1 overflow-hidden p-4 gap-4 bg-slate-950">
         
-        {/* SIDEBAR - PROBLEMS LIST */}
+        {/* SIDEBAR - PROBLEMS & LEADERBOARD TOGGLE */}
         <section className="w-72 bg-slate-900/50 backdrop-blur-md border border-slate-800 rounded-2xl p-4 flex flex-col gap-4 shrink-0 overflow-y-auto">
-          <h2 className="text-sm font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-            <Code2 className="w-4 h-4 text-purple-400" />
-            Problems List
-          </h2>
-          
-          <div className="flex flex-col gap-2">
-            {problems.map((prob) => {
-              const isSelected = prob.id === selectedProblemId;
-              let diffBadgeColor = "text-emerald-400 bg-emerald-950/40 border-emerald-900/60";
-              if (prob.difficulty === "Medium") {
-                diffBadgeColor = "text-amber-400 bg-amber-950/40 border-amber-900/60";
-              } else if (prob.difficulty === "Hard") {
-                diffBadgeColor = "text-red-400 bg-red-950/40 border-red-900/60";
-              }
-
-              return (
-                <button
-                  key={prob.id}
-                  onClick={() => !isSubmitting && setSelectedProblemId(prob.id)}
-                  disabled={isSubmitting}
-                  className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 cursor-pointer ${
-                    isSelected
-                      ? 'bg-purple-950/20 border-purple-500/50 shadow-md shadow-purple-500/5 text-white'
-                      : 'bg-slate-950/30 border-slate-800/80 text-slate-300 hover:bg-slate-800/20 hover:border-slate-800'
-                  }`}
-                >
-                  <div className="flex justify-between items-start gap-2 mb-1.5">
-                    <span className="font-semibold text-sm line-clamp-1 flex-1">{prob.title}</span>
-                    <ChevronRight className={`w-4 h-4 shrink-0 transition-transform ${isSelected ? 'translate-x-0.5 text-purple-400' : 'text-slate-600'}`} />
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[10px] px-2 py-0.5 rounded-md border font-semibold ${diffBadgeColor}`}>
-                      {prob.difficulty}
-                    </span>
-                    <span className="text-[10px] text-slate-500 line-clamp-1">{prob.tags}</span>
-                  </div>
-                </button>
-              );
-            })}
-
-            {problems.length === 0 && (
-              <div className="text-center py-8 text-slate-600 text-sm">
-                No problems found. Seed the database first!
-              </div>
-            )}
+          {/* View Toggler */}
+          <div className="flex border-b border-slate-800 pb-2 shrink-0">
+            <button
+              onClick={() => setLeftView('problems')}
+              className={`flex-1 text-center pb-2 text-xs font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer border-b-2 ${
+                leftView === 'problems'
+                  ? 'text-purple-400 border-purple-500'
+                  : 'text-slate-500 border-transparent hover:text-slate-350'
+              }`}
+            >
+              Problems
+            </button>
+            <button
+              onClick={() => setLeftView('leaderboard')}
+              className={`flex-1 text-center pb-2 text-xs font-bold uppercase tracking-wider transition-all duration-200 cursor-pointer border-b-2 ${
+                leftView === 'leaderboard'
+                  ? 'text-purple-400 border-purple-500'
+                  : 'text-slate-500 border-transparent hover:text-slate-350'
+              }`}
+            >
+              Leaderboard
+            </button>
           </div>
+
+          {leftView === 'problems' ? (
+            <div className="flex flex-col gap-2">
+              {problems.map((prob) => {
+                const isSelected = prob.id === selectedProblemId;
+                let diffBadgeColor = "text-emerald-400 bg-emerald-950/40 border-emerald-900/60";
+                if (prob.difficulty === "Medium") {
+                  diffBadgeColor = "text-amber-400 bg-amber-950/40 border-amber-900/60";
+                } else if (prob.difficulty === "Hard") {
+                  diffBadgeColor = "text-red-400 bg-red-950/40 border-red-900/60";
+                }
+
+                return (
+                  <button
+                    key={prob.id}
+                    onClick={() => !isSubmitting && setSelectedProblemId(prob.id)}
+                    disabled={isSubmitting}
+                    className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 cursor-pointer ${
+                      isSelected
+                        ? 'bg-purple-950/20 border-purple-500/50 shadow-md shadow-purple-500/5 text-white'
+                        : 'bg-slate-950/30 border-slate-800/80 text-slate-300 hover:bg-slate-800/20 hover:border-slate-800'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start gap-2 mb-1.5">
+                      <span className="font-semibold text-sm line-clamp-1 flex-1">{prob.title}</span>
+                      <ChevronRight className={`w-4 h-4 shrink-0 transition-transform ${isSelected ? 'translate-x-0.5 text-purple-400' : 'text-slate-600'}`} />
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] px-2 py-0.5 rounded-md border font-semibold ${diffBadgeColor}`}>
+                        {prob.difficulty}
+                      </span>
+                      <span className="text-[10px] text-slate-500 line-clamp-1">{prob.tags}</span>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {problems.length === 0 && (
+                <div className="text-center py-8 text-slate-600 text-sm">
+                  No problems found. Seed the database first!
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
+                🏆 Global Standings
+              </h3>
+              
+              {loadingLeaderboard ? (
+                <div className="text-center py-8 text-slate-500 text-xs">
+                  Loading rankings...
+                </div>
+              ) : leaderboard.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {leaderboard.map((rankInfo) => {
+                    const isCurrentUser = rankInfo.userId === userId;
+                    let rankBadge = `${rankInfo.rank}`;
+                    if (rankInfo.rank === 1) rankBadge = '🥇';
+                    else if (rankInfo.rank === 2) rankBadge = '🥈';
+                    else if (rankInfo.rank === 3) rankBadge = '🥉';
+
+                    return (
+                      <div
+                        key={rankInfo.userId}
+                        className={`flex items-center gap-3 p-3 rounded-xl border transition-all duration-200 ${
+                          isCurrentUser
+                            ? 'bg-purple-950/20 border-purple-500/40 text-white'
+                            : 'bg-slate-950/30 border-slate-800/80 text-slate-300'
+                        }`}
+                      >
+                        <span className="text-sm font-bold w-6 text-center shrink-0">
+                          {rankBadge}
+                        </span>
+                        
+                        {rankInfo.imageUrl ? (
+                          <img
+                            src={rankInfo.imageUrl}
+                            alt={rankInfo.username}
+                            className="w-7 h-7 rounded-full border border-slate-700 object-cover shrink-0"
+                          />
+                        ) : (
+                          <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] font-bold text-slate-450 shrink-0">
+                            {rankInfo.username.substring(0, 2).toUpperCase()}
+                          </div>
+                        )}
+
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-xs truncate">
+                            {rankInfo.username}
+                            {isCurrentUser && (
+                              <span className="ml-1.5 text-[9px] font-bold text-purple-400 bg-purple-950/50 px-1.5 py-0.5 rounded border border-purple-800/60 uppercase">
+                                You
+                              </span>
+                            )}
+                          </p>
+                        </div>
+
+                        <span className="text-xs font-bold text-amber-400 shrink-0 bg-amber-950/20 border border-amber-900/40 px-2 py-0.5 rounded-md">
+                          {rankInfo.points} pts
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-slate-600 text-xs">
+                  No rankings found. Be the first to solve a problem!
+                </div>
+              )}
+            </div>
+          )}
         </section>
 
         {/* WORKSPACE AREA (Left: Description, Right: Editor + Logs) */}

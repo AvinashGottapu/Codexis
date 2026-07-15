@@ -54,6 +54,7 @@ export const rateLimiter = async (request, reply) => {
 
     if (currentCount >= limit.max) {
       const oldestTimestamp = await redis.zrange(key, 0, 0, 'WITHSCORES');
+       //  the oldest request is at index 0. 0, 0 tells Redis to fetch only the first (oldest) item.
       let retryAfter = Math.ceil(limit.windowMs / 1000);
       
       if (oldestTimestamp && oldestTimestamp.length > 0) {

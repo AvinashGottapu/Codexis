@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import dotenv from 'dotenv';
 import submissionRoutes from './routes/submission.routes.js';
+import leaderboardRoutes from './routes/leaderboard.routes.js';
 import { initRedisSubscriber } from './services/redisSubscriber.js';
 
 dotenv.config();
@@ -9,6 +10,7 @@ const fastify = Fastify({ logger: true });
 
 // Register modular routers
 fastify.register(submissionRoutes, { prefix: '/api/submissions' });
+fastify.register(leaderboardRoutes, { prefix: '/api/leaderboard' });
 
 // Initialize Redis Subscriber to sync database statuses from evaluator
 initRedisSubscriber();

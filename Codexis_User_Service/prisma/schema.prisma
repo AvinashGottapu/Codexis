@@ -13,6 +13,7 @@ model User {
   username    String       @unique
   imageUrl    String?      // Sync profile picture URL from Clerk
   submissions Submission[]
+  points      Int          @default(0)
   createdAt   DateTime     @default(now())
 }
 

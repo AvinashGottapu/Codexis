@@ -7,6 +7,12 @@ dotenv.config();
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
 
+// Create a standard Redis client for writing ZSET updates (subscriber instance cannot be used for writing)
+const redisClient = new Redis({
+  host: REDIS_HOST,
+  port: REDIS_PORT,
+});
+
 /**
  * Initialize Redis Subscriber to listen for status updates from the Evaluator Service
  * and persist them to the User/Submission Database (port 5433).
@@ -39,7 +45,7 @@ export const initRedisSubscriber = () => {
         }
 
         // Update submission status in the database on port 5433
-        await prisma.submission.update({
+        const updatedSubmission = await prisma.submission.update({
           where: { id: submissionId },
           data: {
             status,
@@ -50,6 +56,40 @@ export const initRedisSubscriber = () => {
         });
 
         console.log(`[Submission Service Redis] Successfully updated database record for submission ${submissionId}`);
+
+        // If code execution is ACCEPTED, award points if it's the user's first time solving this problem
+        if (status === 'ACCEPTED') {
+          const userId = updatedSubmission.userId;
+          const problemId = updatedSubmission.problemId;
+
+          // Check if this user has already solved this problem before
+          const existingAcceptedSubmissions = await prisma.submission.count({
+            where: {    // TC => LOG(N) 
+              userId,
+              problemId,
+              status: 'ACCEPTED',
+              id: { not: submissionId },
+            },
+          });
+
+          if (existingAcceptedSubmissions === 0) {
+            console.log(`[Leaderboard] First-time accept for user ${userId} on problem ${problemId}! Awarding 10 points.`);
+
+            // 1. Update SQL Database points
+            await prisma.user.update({
+              where: { id: userId },
+              data: {
+                points: { increment: 10 },
+              },
+            });
+
+            // 2. Update Redis ZSET Leaderboard
+            await redisClient.zincrby('leaderboard:global', 10, userId);
+            console.log(`[Leaderboard] Successfully updated Redis ZSET leaderboard:global for user ${userId}`);
+          } else {
+            console.log(`[Leaderboard] User ${userId} has already solved problem ${problemId} before. No points awarded.`);
+          }
+        }
 
       } catch (err) {
         console.error('[Submission Service Redis] Error processing message or updating database:', err.message);
