@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import submissionRoutes from './routes/submission.routes.js';
 import leaderboardRoutes from './routes/leaderboard.routes.js';
 import { initRedisSubscriber } from './services/redisSubscriber.js';
+import { initLeaderboardReconciler } from './services/leaderboardReconciler.js';
 
 dotenv.config();
 
@@ -14,6 +15,9 @@ fastify.register(leaderboardRoutes, { prefix: '/api/leaderboard' });
 
 // Initialize Redis Subscriber to sync database statuses from evaluator
 initRedisSubscriber();
+
+// Initialize the background Leaderboard Reconciler (Eventual Consistency)
+initLeaderboardReconciler();
 
 // Health check endpoint
 fastify.get('/health', async () => {

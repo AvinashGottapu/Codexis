@@ -1,17 +1,12 @@
 import Redis from 'ioredis';
 import { prisma } from '../config/db.js';
 import dotenv from 'dotenv';
+import { redisClient } from '../config/redis.js';
 
 dotenv.config();
 
 const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
 const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
-
-// Create a standard Redis client for writing updates and locks (subscriber instance cannot be used)
-const redisClient = new Redis({
-  host: REDIS_HOST,
-  port: REDIS_PORT,
-});
 
 
 const acquireLockWithRetry = async (lockKey, ttlMs = 5000, maxWaitMs = 3000) => {
