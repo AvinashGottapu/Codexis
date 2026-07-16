@@ -12,7 +12,8 @@ import {
   AlertTriangle,
   Server,
   Layers,
-  ChevronRight
+  ChevronRight,
+  ChevronLeft
 } from 'lucide-react';
 import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton, useAuth, useUser } from '@clerk/clerk-react';
 
@@ -93,6 +94,7 @@ export default function App() {
   const [leftView, setLeftView] = useState('problems');
   const [leaderboard, setLeaderboard] = useState([]);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
+  const [leaderboardPage, setLeaderboardPage] = useState(0);
 
   // Service health states
   const [servicesHealth, setServicesHealth] = useState({
@@ -354,19 +356,34 @@ export default function App() {
     }
   };
 
-  const setupSocketConnection = (submissionId) => {
+  const setupSocketConnection = async (submissionId) => {
+    let token = null;
+    try {
+      token = await getToken();
+    } catch (err) {
+      console.error('[Socket] Failed to retrieve auth token:', err);
+    }
+
     // Connect to Socket Service via Gateway (Port 8000)
+    // This sends a connection request over the network to the server. 
+    // (Then server internal node modules (io-library) emits : connection.. )
     const socket = io(GATEWAY_URL, {
       transports: ['websocket'],
+      auth: {
+        token: token ? `Bearer ${token}` : '',
+      }
     });
 
     socketRef.current = socket;
 
     socket.on('connect', () => {
+      // The Socket.IO Client Library (running in the browser on the frontend) emits the 'connect' event.
       setSocketStatus('connected');
       addLog('Socket', 'Connected to broker. Subscribing to updates...', 'info');
       // Join room for this submission
       socket.emit('joinSubmission', submissionId);
+      // The server puts that specific browser tab into a virtual room called 'submission-123'.
+      // Since the user's browser tab is the only client inside the 'submission-123' room, only that user's tab receives the message.
     });
 
     socket.on('connect_error', (err) => {
@@ -598,9 +615,34 @@ export default function App() {
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-                🏆 Global Standings
-              </h3>
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                  🏆 Global Standings
+                </h3>
+                {leaderboard.length > 0 && (
+                  <div className="flex items-center gap-1 bg-slate-950/40 border border-slate-800/60 rounded-lg p-0.5 shrink-0">
+                    <button
+                      onClick={() => setLeaderboardPage(prev => Math.max(0, prev - 1))}
+                      disabled={leaderboardPage === 0}
+                      className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:hover:text-slate-400 disabled:hover:bg-transparent cursor-pointer transition-colors"
+                      title="Previous Page"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                    </button>
+                    <span className="text-[10px] font-bold text-slate-500 min-w-[28px] text-center select-none">
+                      {leaderboardPage + 1}/{Math.ceil(leaderboard.length / 10)}
+                    </span>
+                    <button
+                      onClick={() => setLeaderboardPage(prev => Math.min(Math.ceil(leaderboard.length / 10) - 1, prev + 1))}
+                      disabled={leaderboardPage >= Math.ceil(leaderboard.length / 10) - 1}
+                      className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 disabled:opacity-30 disabled:hover:text-slate-400 disabled:hover:bg-transparent cursor-pointer transition-colors"
+                      title="Next Page"
+                    >
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
+              </div>
               
               {loadingLeaderboard ? (
                 <div className="text-center py-8 text-slate-500 text-xs">
@@ -608,7 +650,7 @@ export default function App() {
                 </div>
               ) : leaderboard.length > 0 ? (
                 <div className="flex flex-col gap-2">
-                  {leaderboard.map((rankInfo) => {
+                  {leaderboard.slice(leaderboardPage * 10, (leaderboardPage + 1) * 10).map((rankInfo) => {
                     const isCurrentUser = rankInfo.userId === userId;
                     let rankBadge = `${rankInfo.rank}`;
                     if (rankInfo.rank === 1) rankBadge = '🥇';

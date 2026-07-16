@@ -21,8 +21,8 @@ const redisClient = new Redis({
  */
 export const getLeaderboard = async (request, reply) => {
   try {
-    // 1. Fetch top 10 from Redis Sorted Set
-    let leaderboardRaw = await redisClient.zrevrange('leaderboard:global', 0, 9, 'WITHSCORES');
+    // 1. Fetch top 50 from Redis Sorted Set
+    let leaderboardRaw = await redisClient.zrevrange('leaderboard:global', 0, 49, 'WITHSCORES');
     // We can later apply the pagination for all users with the help of the page index...
 
     let rankings = [];
@@ -47,7 +47,7 @@ export const getLeaderboard = async (request, reply) => {
         await pipeline.exec();
 
         // Refetch from Redis
-        leaderboardRaw = await redisClient.zrevrange('leaderboard:global', 0, 9, 'WITHSCORES');
+        leaderboardRaw = await redisClient.zrevrange('leaderboard:global', 0, 49, 'WITHSCORES');
       }
     }
 

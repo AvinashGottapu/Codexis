@@ -49,7 +49,7 @@ export const createSubmission = async (request, reply) => {
 
     // 3. Handle run-only evaluations (in-memory, skip database insertion)
     if (validatedData.isRunOnly) {
-      const submissionId = `run-${crypto.randomUUID()}`;
+      const submissionId = `run-${userId}-${crypto.randomUUID()}`;
 
       await runQueue.add(
         'evaluate',
