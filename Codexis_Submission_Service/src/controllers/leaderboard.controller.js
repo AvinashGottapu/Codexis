@@ -41,6 +41,7 @@ export const getLeaderboard = async (request, reply) => {
       if (topUsers.length > 0) {
         // Multi block to bulk write in one round-trip
         const pipeline = redisClient.multi();
+        //  By using multi(), Redis guarantees that none of the users are visible until all 50 are written. It is all-or-nothing.
         topUsers.forEach((user) => {
           pipeline.zadd('leaderboard:global', user.points, user.id);
         });

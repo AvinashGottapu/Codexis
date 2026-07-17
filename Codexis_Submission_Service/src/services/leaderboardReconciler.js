@@ -84,6 +84,7 @@ export const initLeaderboardReconciler = () => {
 
   const runTick = async () => {
     try {
+      // A reconciler is a background process that compares two systems and makes them consistent.
       await reconcileLeaderboard();
     } catch (err) {
       console.error('[Leaderboard Reconciler] Tick execution failed:', err.message);
