@@ -44,7 +44,7 @@ const cleanOutputString = (str) => {
 /**
  * Main evaluation entry point
  */
-export const evaluateSubmission = async (submissionId, code, language, testcases, timeLimitMs = 2000) => {
+export const evaluateSubmission = async (submissionId, code, language, testcases, timeLimitMs = 2000, memoryLimitMb = 256) => {
   const baseConfig = LANG_CONFIGS[language];
   if (!baseConfig) {
     return {
@@ -57,7 +57,10 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
   const config = { ...baseConfig };
 
   if (language === 'java') {
-    const match = code.match(/public\s+class\s+(\w+)/);
+    let match = code.match(/public\s+class\s+(\w+)/);
+    if (!match) {
+      match = code.match(/class\s+(\w+)/);
+    }
     if (match) {
       const className = match[1];
       config.fileName = `${className}.java`;
@@ -93,7 +96,7 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
 
     for (let i = 0; i < testcases.length; i++) {
       const tc = testcases[i];
-      const runResult = await runTestcase(submissionId, submissionDir, config, tc.input, timeLimitMs);
+      const runResult = await runTestcase(submissionId, submissionDir, config, tc.input, timeLimitMs, memoryLimitMb);
 
       // If one of the test cases fails constraints, abort immediately
       if (runResult.status !== 'SUCCESS') {

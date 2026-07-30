@@ -22,6 +22,10 @@ const redisPublisher = new Redis({
   port: REDIS_PORT,
 });
 
+redisPublisher.on('error', (err) => {
+  console.error('[Redis Publisher] Connection error:', err.message || err);
+});
+
 app.use(express.json());
 
 // Mount the modular Bull Board dashboard router under the /ui prefix
@@ -68,7 +72,8 @@ const processJob = async (job, isRunOnly) => {
       code,
       language,
       testcasesToRun,
-      problem.timeLimit
+      problem.timeLimit,
+      problem.memoryLimit
     );
 
     console.log(`[Worker - ${queueLabel}] Evaluation completed for ${submissionId}. Result: ${result.status}`);

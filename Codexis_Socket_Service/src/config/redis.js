@@ -10,3 +10,7 @@ export const redisSubscriber = new Redis({
   host: REDIS_HOST,
   port: REDIS_PORT,
 });
+
+redisSubscriber.on('error', (err) => {
+  console.error('[Redis Subscriber] Connection error:', err.message || err);
+});

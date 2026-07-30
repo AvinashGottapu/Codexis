@@ -11,6 +11,10 @@ const redis = new Redis({
   port: REDIS_PORT,
 });
 
+redis.on('error', (err) => {
+  console.error('[Redis Rate Limiter Client] Connection error:', err.message || err);
+});
+
 // Configuration for rate limits
 const LIMITS = {
   run: {

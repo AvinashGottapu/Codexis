@@ -52,7 +52,12 @@ export const readContainerLogs = async (container) => {
         } catch (e) {
           // Stream might already be closed
         }
-        resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+        try {
+          container.kill(); // Kill the container instantly to stop the print bomb
+        } catch (e) {
+          // Container might already be stopped
+        }
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), limitExceeded: true });
       } else {
         appendFn(chunk.toString());
       }
@@ -71,14 +76,14 @@ export const readContainerLogs = async (container) => {
     logsStream.on('end', () => {
       if (!resolved) {
         resolved = true;
-        resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), limitExceeded: false });
       }
     });
 
     logsStream.on('error', (err) => {
       if (!resolved) {
         resolved = true;
-        resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), limitExceeded: false });
       }
     });
   });
@@ -170,7 +175,7 @@ export const compileCode = async (submissionId, submissionDir, config) => {
 /**
  * Runs a single testcase inside a restricted Docker container
   */
-  export const runTestcase = async (submissionId, submissionDir, config, testcaseInput, timeLimitMs) => {
+  export const runTestcase = async (submissionId, submissionDir, config, testcaseInput, timeLimitMs, memoryLimitMb = 256) => {
     const hostPath = submissionDir.replace(/\\/g, '/');
 
     // Write testcase input to a file in the submission directory
@@ -188,7 +193,7 @@ export const compileCode = async (submissionId, submissionDir, config) => {
         // The program can only use what it already has — nothing from outside.. For Security, we disable network access.  The program cannot make any network requests (Malicious code OR Prevent cheating)..
         // If internet is there any some users use it to fetch answers from online sources. ( OR CHATGPT )  So we disable network access.
         //   So we disable network access.
-        Memory: 1000000000,            // 1GB Memory limit
+        Memory: memoryLimitMb * 1024 * 1024, // Dynamic memory limit from database
         NanoCpus: 500000000,           // 0.5 Cores CPU limit
 
         // --- Sandbox Hardening Constraints ---
@@ -215,6 +220,9 @@ export const compileCode = async (submissionId, submissionDir, config) => {
 
     const startTime = Date.now();
     await container.start();
+
+    // Start reading container logs in parallel to detect print bombs early
+    const logsPromise = readContainerLogs(container);
 
     // Setup watchdog timeout
     let killed = false;
@@ -244,8 +252,8 @@ export const compileCode = async (submissionId, submissionDir, config) => {
     const endTime = Date.now();
     const executionTime = endTime - startTime;
 
-    // Retrieve stdout/stderr logs
-    const { stdout, stderr } = await readContainerLogs(container);
+    // Retrieve stdout/stderr logs (waits for logsPromise to complete)
+    const { stdout, stderr, limitExceeded } = await logsPromise;
     await container.remove();
 
     // Clean up input file for this testcase
@@ -255,6 +263,14 @@ export const compileCode = async (submissionId, submissionDir, config) => {
       }
     } catch (err) {
       // Ignore cleanup error
+    }
+
+    if (limitExceeded) {
+      return {
+        status: 'OUTPUT_LIMIT_EXCEEDED',
+        executionTime,
+        errorDetails: 'Output Limit Exceeded (Print Bomb / Log Flood Protection)',
+      };
     }
 
     if (killed) {

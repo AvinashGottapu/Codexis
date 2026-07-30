@@ -21,6 +21,28 @@ export const getAllProblems = async () => {
 };
 
 /**
+ * Fetch multiple problems by their IDs with basic metadata fields
+ */
+export const getProblemsByIds = async (ids) => {
+  return await prisma.problem.findMany({
+    where: {
+      id: { in: ids },
+    },
+    select: {
+      id: true,
+      title: true,
+      difficulty: true,
+      tags: true,
+      companies: true,
+      timeLimit: true,
+      memoryLimit: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+};
+
+/**
  * Fetch a single problem in detail with all its relations
  */
 export const getProblemById = async (id) => {

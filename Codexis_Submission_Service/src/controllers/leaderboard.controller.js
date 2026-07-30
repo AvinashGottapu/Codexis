@@ -12,6 +12,10 @@ const redisClient = new Redis({
   port: REDIS_PORT,
 });
 
+redisClient.on('error', (err) => {
+  console.error('[Redis Leaderboard Client] Connection error:', err.message || err);
+});
+
 /**
  * Fetch the global leaderboard.
  * Operates on Cache-Aside:

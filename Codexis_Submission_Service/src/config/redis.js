@@ -11,3 +11,7 @@ export const redisClient = new Redis({
   host: REDIS_HOST,
   port: REDIS_PORT,
 });
+
+redisClient.on('error', (err) => {
+  console.error('[Redis Client] Connection error:', err.message || err);
+});

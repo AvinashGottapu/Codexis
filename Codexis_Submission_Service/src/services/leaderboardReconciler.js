@@ -22,6 +22,7 @@ export const reconcileLeaderboard = async () => {
             createdAt: {
               gte: new Date(Date.now() - TIME_BUFFER_MS)
             }
+            // Find users for whom NONE of their submissions were created within the last TIME_BUFFER_MS.
           }
         }
       },
@@ -94,6 +95,6 @@ export const initLeaderboardReconciler = () => {
     }
   };
 
-  // Start the first loop 30 seconds after server startup to avoid system startup spikes
+  // Start the first loop 60 seconds after server startup to avoid system startup spikes
   setTimeout(runTick, 60 * 1000); 
 };

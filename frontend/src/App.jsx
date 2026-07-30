@@ -95,6 +95,9 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
   const [leaderboardPage, setLeaderboardPage] = useState(0);
+  const [problemsPage, setProblemsPage] = useState(1);
+  const [hasMoreProblems, setHasMoreProblems] = useState(true);
+  const [loadingProblems, setLoadingProblems] = useState(false);
 
   // Service health states
   const [servicesHealth, setServicesHealth] = useState({
@@ -164,19 +167,50 @@ export default function App() {
     }
   }, [leftView]);
 
-  const fetchProblems = async () => {
+  const fetchProblems = async (page = 1, append = false) => {
+    if (loadingProblems) return;
+    setLoadingProblems(true);
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/problems/all`);
+      const res = await fetch(`${GATEWAY_URL}/api/problems/all?page=${page}&limit=20`);
       if (res.ok) {
         const data = await res.json();
-        setProblems(data);
-        if (data.length > 0) {
-          setSelectedProblemId(data[0].id);
+        const probs = data.problems || [];
+
+        if (append) {
+          setProblems((prev) => {
+            const existingIds = new Set(prev.map((p) => p.id));
+            const newProbs = probs.filter((p) => !existingIds.has(p.id));
+            return [...prev, ...newProbs];
+          });
+        } else {
+          setProblems(probs);
+          if (probs.length > 0 && !selectedProblemId) {
+            setSelectedProblemId(probs[0].id);
+          }
+        }
+
+        if (data.pagination) {
+          setHasMoreProblems(page < data.pagination.totalPages);
+        } else {
+          setHasMoreProblems(false);
         }
       }
     } catch (err) {
       console.error('Failed to fetch problems:', err);
       addLog('System', 'Failed to fetch problems list. Make sure the API Gateway is running on port 8000.', 'error');
+    } finally {
+      setLoadingProblems(false);
+    }
+  };
+
+  const handleSidebarScroll = (e) => {
+    if (leftView !== 'problems' || !hasMoreProblems || loadingProblems) return;
+
+    const { scrollTop, scrollHeight, clientHeight } = e.target;
+    if (scrollHeight - scrollTop - clientHeight < 30) {
+      const nextPage = problemsPage + 1;
+      setProblemsPage(nextPage);
+      fetchProblems(nextPage, true);
     }
   };
 
@@ -545,7 +579,7 @@ export default function App() {
       <main className="flex flex-1 overflow-hidden p-4 gap-4 bg-slate-950">
         
         {/* SIDEBAR - PROBLEMS & LEADERBOARD TOGGLE */}
-        <section className="w-72 bg-slate-900/50 backdrop-blur-md border border-slate-800 rounded-2xl p-4 flex flex-col gap-4 shrink-0 overflow-y-auto">
+        <section onScroll={handleSidebarScroll} className="w-72 bg-slate-900/50 backdrop-blur-md border border-slate-800 rounded-2xl p-4 flex flex-col gap-4 shrink-0 overflow-y-auto">
           {/* View Toggler */}
           <div className="flex border-b border-slate-800 pb-2 shrink-0">
             <button
@@ -606,6 +640,12 @@ export default function App() {
                   </button>
                 );
               })}
+
+              {loadingProblems && problems.length > 0 && (
+                <div className="text-center py-2 text-xs text-purple-400 font-medium">
+                  Loading more problems...
+                </div>
+              )}
 
               {problems.length === 0 && (
                 <div className="text-center py-8 text-slate-600 text-sm">
