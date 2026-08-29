@@ -4,7 +4,8 @@ import { Server } from 'socket.io';
 import dotenv from 'dotenv';
 import { verifyToken } from '@clerk/backend';
 import { registerSocketHandlers } from './sockets/handlers.js';
-import { initRedisSubscriber } from './services/redisSubscriber.js';
+import { connectKafka } from './config/kafka.js';
+import { initKafkaSubscriber } from './services/kafkaSubscriber.js';
 
 dotenv.config();
 
@@ -58,15 +59,24 @@ io.on('connection', (socket) => {
   registerSocketHandlers(io, socket);
 });
 
-// Start Redis Pub/Sub subscription and relaying
-initRedisSubscriber(io);
-
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'codexis-socket-service' });
 });
 
-// Start Server
-httpServer.listen(PORT, () => {
-  console.log(`[Socket Service] WebSocket server running on port ${PORT}`);
-});
+// Start Server and Kafka Subscriber
+const start = async () => {
+  try {
+    await connectKafka();
+    await initKafkaSubscriber(io);
+    
+    httpServer.listen(PORT, () => {
+      console.log(`[Socket Service] WebSocket server running on port ${PORT}`);
+    });
+  } catch (err) {
+    console.error('[Socket Service] Failed to start WebSocket service:', err);
+    process.exit(1);
+  }
+};
+
+start();

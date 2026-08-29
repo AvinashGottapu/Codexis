@@ -36,6 +36,111 @@ services:
       - redis_data:/data
     restart: always
 
+  controller1: ## Actually odd number of controllers are preffered..
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: codexis-controller-1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller1:29093,2@controller2:29093'
+      KAFKA_LISTENERS: 'CONTROLLER://0.0.0.0:29093'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      KAFKA_LOG_DIRS: '/tmp/kraft-controller-logs'
+    restart: always
+
+  controller2:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: codexis-controller-2
+    environment:
+      KAFKA_NODE_ID: 2
+      KAFKA_PROCESS_ROLES: 'controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller1:29093,2@controller2:29093'
+      KAFKA_LISTENERS: 'CONTROLLER://0.0.0.0:29093'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      KAFKA_LOG_DIRS: '/tmp/kraft-controller-logs'
+    restart: always
+
+  # Defines the Docker Compose service name as "broker1"
+  broker1:
+    # Uses the official Confluent Docker image for Apache Kafka version 7.4.0
+    image: confluentinc/cp-kafka:7.4.0
+    # Sets the name of the active Docker container to "codexis-broker-1"
+    container_name: codexis-broker-1
+    # Begins the network port mapping configuration
+    ports:
+      # Exposes port 9092 from inside the container to port 9092 on your host machine (localhost)
+      - "9092:9092"
+    # Begins the list of environment variables passed inside the container
+    environment:
+      # Gives this broker a unique integer ID (3) within the Kafka cluster (controllers used 1 and 2)
+      KAFKA_NODE_ID: 3
+      # Configures this node to act ONLY as a Broker (storing data, no controller brain duties)
+      KAFKA_PROCESS_ROLES: 'broker'
+      # Tells the broker where to find the controllers (node 1 at controller1:29093, node 2 at controller2:29093)
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller1:29093,2@controller2:29093'
+      # Defines internal port 29092 for other brokers and port 9092 for external clients to connect to
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092'
+      # The connection addresses this broker broadcasts back to clients (internal container link vs host localhost)
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://broker1:29092,PLAINTEXT_HOST://localhost:9092'
+      # Maps connection channels to security rules (all run on PLAINTEXT/no authentication here)
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      # Tells Kafka to use the PLAINTEXT listener (port 29092) for broker-to-broker communication
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      # Tells Kafka which listener name the controller quorum nodes use to communicate
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      # The unique cluster ID that unites this broker with the controllers (must match exactly)
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      # The directory inside the container where Kafka writes the partition database log files to disk
+      KAFKA_LOG_DIRS: '/tmp/kraft-broker-logs'
+      # Sets the default number of partitions to 2 for any topic created automatically
+      KAFKA_NUM_PARTITIONS: 2
+      # Sets the default number of copies (replicas) to 2 for any topic created automatically
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+      # Sets the replica count to 2 for Kafka's internal offsets tracking topic (essential for consumer groups)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      # Sets the minimum number of in-sync brokers (1) required to accept writes when database state logs sync
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # Sets the replication factor of internal transaction logs to 2 (ensures transaction safety across brokers)
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+    # Specifies startup order dependency
+    depends_on:
+      # Tells Docker not to start this broker until the controller1 container is running
+      - controller1
+      # Tells Docker not to start this broker until the controller2 container is running
+      - controller2
+    # Automatically restarts this container if it crashes or if the Docker daemon restarts
+    restart: always
+
+  broker2:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: codexis-broker-2
+    ports:
+      - "9093:9093"
+    environment:
+      KAFKA_NODE_ID: 4
+      KAFKA_PROCESS_ROLES: 'broker'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@controller1:29093,2@controller2:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://broker2:29092,PLAINTEXT_HOST://localhost:9093'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+      KAFKA_LOG_DIRS: '/tmp/kraft-broker-logs'
+      KAFKA_NUM_PARTITIONS: 2
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 2
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+    depends_on:
+      - controller1
+      - controller2
+    restart: always
+
   api_gateway:
     image: nginx:1.25-alpine
     container_name: codexis-api-gateway

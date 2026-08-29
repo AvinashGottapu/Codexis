@@ -127,7 +127,11 @@ export const compileCode = async (submissionId, submissionDir, config) => {
   const container = await docker.createContainer({
     Image: config.image,
     Cmd: config.compileCmd, // Container Runs the command inside the /app folder...
+    Labels: {
+      owner: 'codexis',
+    },
     HostConfig: {
+       NetworkMode: 'none',
       Binds: [`${hostPath}:/app`],
       // Mount a size-limited temporary memory tmpfs (/tmp) for compiler scratch files (g++, javac, etc.)
       // to ensure standard compilation processes don't get blocked by permissions or readonly settings
@@ -170,136 +174,250 @@ export const compileCode = async (submissionId, submissionDir, config) => {
 
   return { success: true };
 };
+/**
+ * Spawns a persistent, long-running sandbox container in the background
+ */
+export const createPersistentContainer = async (submissionId, submissionDir, config, memoryLimitMb = 256) => {
+  const hostPath = submissionDir.replace(/\\/g, '/');
+  await ensureImageExists(config.image);
 
+  const container = await docker.createContainer({
+    Image: config.image,
+    Cmd: ['sleep', 'infinity'], // Keeps the container alive indefinitely until stopped/killed
+    Labels: {
+      owner: 'codexis',
+    },
+    HostConfig: {
+      Binds: [`${hostPath}:/app:ro`],
+      NetworkMode: 'none',  
+      Memory: memoryLimitMb * 1024 * 1024,
+      NanoCpus: 500000000, // 0.5 cores CPU limit
+      PidsLimit: 20, // Fork bomb protection
+      ReadonlyRootfs: true, // Hardened read-only container files
+      Tmpfs: { '/tmp': 'size=10M,rw' } // 10MB memory disk for scratch writing
+    },
+    WorkingDir: '/app',
+  });
+
+  await container.start();
+  return container;
+};
 
 /**
- * Runs a single testcase inside a restricted Docker container
-  */
-  export const runTestcase = async (submissionId, submissionDir, config, testcaseInput, timeLimitMs, memoryLimitMb = 256) => {
-    const hostPath = submissionDir.replace(/\\/g, '/');
+ * Capture stdout and stderr streams from a docker exec execution and convert to strings
+ */
+export const readExecLogs = async (container, execStream) => {
+  return new Promise((resolve) => {
+    const stdoutStream = new PassThrough();
+    const stderrStream = new PassThrough();
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
 
-    // Write testcase input to a file in the submission directory
-    const inputPath = path.join(submissionDir, 'input.txt');
-    await fs.promises.writeFile(inputPath, testcaseInput);
+    // --- Print/Log Bomb OOM Protection ---
+    const MAX_LOG_SIZE = 50 * 1024; // 50 KB
 
-    await ensureImageExists(config.image);
+    const handleData = (streamType, chunk, appendFn) => {
+      if (resolved) return;
+      const currentLength = stdout.length + stderr.length;
+      if (currentLength + chunk.length > MAX_LOG_SIZE) {
+        const remainingSpace = MAX_LOG_SIZE - currentLength;
+        if (remainingSpace > 0) {
+          appendFn(chunk.slice(0, remainingSpace).toString());
+        }
+        if (streamType === 'stdout') {
+          stdout += '\n...[Output Truncated due to size limit (Print Bomb / Log Flood Protection)]';
+        } else {
+          stderr += '\n...[Output Truncated due to size limit (Print Bomb / Log Flood Protection)]';
+        }
+        resolved = true;
+        try {
+          execStream.destroy();
+        } catch (e) {}
+        try {
+          container.kill(); // Kill container to stop execution
+        } catch (e) {}
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), limitExceeded: true });
+      } else {
+        appendFn(chunk.toString());
+      }
+    };
 
-    const container = await docker.createContainer({
-      Image: config.image,
-      Cmd: ['sh', '-c', `${config.runCmd.join(' ')} < input.txt`], // sh -c "python solution.py < input.txt"
-      HostConfig: {
-        Binds: [`${hostPath}:/app:ro`], // Mount read-only
-        NetworkMode: 'none',  
-        // The program can only use what it already has — nothing from outside.. For Security, we disable network access.  The program cannot make any network requests (Malicious code OR Prevent cheating)..
-        // If internet is there any some users use it to fetch answers from online sources. ( OR CHATGPT )  So we disable network access.
-        //   So we disable network access.
-        Memory: memoryLimitMb * 1024 * 1024, // Dynamic memory limit from database
-        NanoCpus: 500000000,           // 0.5 Cores CPU limit
-
-        // --- Sandbox Hardening Constraints ---
-        
-        // Problem: Fork Bomb Protection
-        // We limit the maximum number of processes/threads the container can spawn to 20.
-        // If a program attempts a fork bomb (while(true) { fork(); }), the OS blocks any 
-        // process creation past 20, keeping the Host CPU scheduler and PID table responsive.
-        PidsLimit: 20,
-
-        // Problem: Hardening local container directories against write loops
-        // Prevents modifications or writes to internal filesystem paths (like /var, /usr)
-        ReadonlyRootfs: true,
-        // without this ReadonlyRootfs: true Compter hardware may full due to malcios code right  
-
-        // Problem: Disk Space / Writing exhaustion
-        // Mounts a size-limited temporary memory-based filesystem (tmpfs) on /tmp
-        // Programs can write small scratch files to /tmp up to 10MB in RAM, but cannot exhaust physical host disk space.
-        Tmpfs: { '/tmp': 'size=10M,rw' }
-        // Experienced programmers know that /tmp is the standard directory for temporary files.
-      },
-      WorkingDir: '/app',
+    stdoutStream.on('data', (chunk) => {
+      handleData('stdout', chunk, (val) => { stdout += val; });
+    });
+    
+    stderrStream.on('data', (chunk) => {
+      handleData('stderr', chunk, (val) => { stderr += val; });
     });
 
-    const startTime = Date.now();
-    await container.start();
+    container.modem.demuxStream(execStream, stdoutStream, stderrStream);
 
-    // Start reading container logs in parallel to detect print bombs early
-    const logsPromise = readContainerLogs(container);
-
-    // Setup watchdog timeout
-    let killed = false;
-    const timeoutId = setTimeout(async () => {
-      killed = true;
-      try {
-        // WHY NOT container.remove() To delete container completely...
-        // By default, Docker does not allow you to delete a container that is still actively running. If you attempt to run container.remove() on a running container, Docker will throw an HTTP 409 Conflict error:
-        await container.kill(); // forcefully stops a running Docker container immediately.
-        // IF container.stop() = So it’s “polite first, force later” 
-        // Container.stop() =>  Docker sends SIGTERM The process is allowed to: finish current work THEN STOP.  If it doesn’t stop in 10 seconds, Docker sends SIGKILL to forcefully terminate it. 
-        //  WASTE OF THAT TIME SO WE USE container.kill() INSTEAD.  It sends SIGKILL immediately, terminating the process without any chance to clean up.
-      } catch (e) {
-        // Container may have already terminated
+    execStream.on('end', () => {
+      if (!resolved) {
+        resolved = true;
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), limitExceeded: false });
       }
-    }, timeLimitMs);
+    });
 
-    let status;
-    try {
-      status = await container.wait();
-      // Docker waits until:  Program exits normally , Program crashes ,  Program gets killed..
-    } catch (err) {
-      status = { StatusCode: -1 };
-    }
-    clearTimeout(timeoutId);
+    execStream.on('error', (err) => {
+      if (!resolved) {
+        resolved = true;
+        resolve({ stdout: stdout.trim(), stderr: stderr.trim(), limitExceeded: false });
+      }
+    });
+  });
+};
 
-    const endTime = Date.now();
-    const executionTime = endTime - startTime;
+/**
+ * Runs a single testcase inside a running persistent sandbox container using Docker Exec API
+ */
+export const runExecTestcase = async (container, submissionDir, config, testcaseInput, timeLimitMs) => {
+  const inputPath = path.join(submissionDir, 'input.txt');
+  await fs.promises.writeFile(inputPath, testcaseInput);
 
-    // Retrieve stdout/stderr logs (waits for logsPromise to complete)
-    const { stdout, stderr, limitExceeded } = await logsPromise;
-    await container.remove();
+  const startTime = Date.now();
+  let killed = false;
+  let execInstance;
 
-    // Clean up input file for this testcase
+  try {
+    execInstance = await container.exec({
+      Cmd: ['sh', '-c', `${config.runCmd.join(' ')} < input.txt`],
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+  } catch (err) {
+    // Clean up input file
     try {
       if (fs.existsSync(inputPath)) {
         await fs.promises.unlink(inputPath);
       }
-    } catch (err) {
-      // Ignore cleanup error
-    }
-
-    if (limitExceeded) {
-      return {
-        status: 'OUTPUT_LIMIT_EXCEEDED',
-        executionTime,
-        errorDetails: 'Output Limit Exceeded (Print Bomb / Log Flood Protection)',
-      };
-    }
-
-    if (killed) {
-      return {
-        status: 'TIME_LIMIT_EXCEEDED',
-        executionTime,
-        errorDetails: 'Time Limit Exceeded',
-      };
-    }
-
-    if (status.StatusCode === 137) {
-      return {
-        status: 'MEMORY_LIMIT_EXCEEDED',
-        executionTime,
-        errorDetails: 'Memory Limit Exceeded (Out of Memory)',
-      };
-    }
-
-    if (status.StatusCode !== 0) {
-      return {
-        status: 'RUNTIME_ERROR',
-        executionTime,
-        errorDetails: stderr || `Runtime Error: Exit code ${status.StatusCode}`,
-      };
-    }
+    } catch (e) {}
 
     return {
-      status: 'SUCCESS',
-      executionTime,
-      stdout,
+      status: 'RUNTIME_ERROR',
+      executionTime: Date.now() - startTime,
+      errorDetails: `Failed to create exec instance: ${err.message}`,
     };
+  }
+
+  let execStream;
+  try {
+    execStream = await execInstance.start({ hijack: true });
+  } catch (err) {
+    try {
+      if (fs.existsSync(inputPath)) {
+        await fs.promises.unlink(inputPath);
+      }
+    } catch (e) {}
+
+    return {
+      status: 'RUNTIME_ERROR',
+      executionTime: Date.now() - startTime,
+      errorDetails: `Failed to start exec instance: ${err.message}`,
+    };
+  }
+
+  // Read logs in parallel
+  const logsPromise = readExecLogs(container, execStream);
+
+  // Setup watchdog timeout
+  const timeoutId = setTimeout(async () => {
+    killed = true;
+    try {
+      await container.kill();
+    } catch (e) {}
+  }, timeLimitMs);
+
+  const { stdout, stderr, limitExceeded } = await logsPromise;
+  clearTimeout(timeoutId);
+
+  // Clean up input file
+  try {
+    if (fs.existsSync(inputPath)) {
+      await fs.promises.unlink(inputPath);
+    }
+  } catch (err) {}
+
+  const executionTime = Date.now() - startTime;
+
+  if (limitExceeded) {
+    return {
+      status: 'OUTPUT_LIMIT_EXCEEDED',
+      executionTime,
+      errorDetails: 'Output Limit Exceeded (Print Bomb / Log Flood Protection)',
+    };
+  }
+
+  if (killed) {
+    return {
+      status: 'TIME_LIMIT_EXCEEDED',
+      executionTime,
+      errorDetails: 'Time Limit Exceeded',
+    };
+  }
+
+  let inspectData;
+  try {
+    inspectData = await execInstance.inspect();
+  } catch (err) {
+    inspectData = { ExitCode: -1 };
+  }
+
+  if (inspectData.ExitCode === 137) {
+    return {
+      status: 'MEMORY_LIMIT_EXCEEDED',
+      executionTime,
+      errorDetails: 'Memory Limit Exceeded (Out of Memory)',
+    };
+  }
+
+  if (inspectData.ExitCode !== 0) {
+    return {
+      status: 'RUNTIME_ERROR',
+      executionTime,
+      errorDetails: stderr || `Runtime Error: Exit code ${inspectData.ExitCode}`,
+    };
+  }
+
+  return {
+    status: 'SUCCESS',
+    executionTime,
+    stdout,
   };
+};
+
+/**
+ * Scans the local Docker daemon on startup and prunes any dangling sandbox
+ * containers that were left running from previous crashed runs (identified by the owner=codexis label).
+ */
+export const sweepOrphansOnBoot = async () => {
+  console.log('[System Recovery] Scanning for orphan sandbox containers on boot...');
+  try {
+    const containers = await docker.listContainers({
+      all: true,
+      filters: JSON.stringify({ label: ['owner=codexis'] })
+    });
+
+    if (containers.length === 0) {
+      console.log('[System Recovery] No orphan sandbox containers found. System is clean.');
+      return;
+    }
+
+    console.log(`[System Recovery] Found ${containers.length} orphan container(s). Pruning now...`);
+    for (const containerInfo of containers) {
+      try {
+        const container = docker.getContainer(containerInfo.Id);
+        // Force stop/kill if running, then remove
+        console.log(`[System Recovery] Killing and removing orphan container: ${containerInfo.Id}`);
+        await container.kill().catch(() => {}); // ignore error if already stopped
+        await container.remove().catch(() => {}); // ignore error if already deleted
+      } catch (e) {
+        console.error(`[System Recovery] Failed to prune container ${containerInfo.Id}:`, e.message || e);
+      }
+    }
+    console.log('[System Recovery] Orphan container prune complete.');
+  } catch (err) {
+    console.error('[System Recovery] Failed to list or prune orphan containers:', err.message || err);
+  }
+};

@@ -1,51 +1,37 @@
 import express from 'express';
-import { Worker } from 'bullmq';
-import Redis from 'ioredis';
 import dotenv from 'dotenv';
-import dashboardRouter from './routes/dashboard.routes.js';
 
-// Import our database client and Docker sandbox manager
+// Import our database client, Docker sandbox manager, and Kafka config
 import { prisma } from './config/db.js';
 import { evaluateSubmission } from './sandbox/sandbox.manager.js';
+import { sweepOrphansOnBoot } from './sandbox/docker.js';
+import { producer, consumer, connectKafka } from './config/kafka.js';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3002;
 
-// Connect to Redis for publishing real-time events to Socket Service
-const REDIS_HOST = process.env.REDIS_HOST || 'localhost';
-const REDIS_PORT = parseInt(process.env.REDIS_PORT || '6379', 10);
-
-const redisPublisher = new Redis({
-  host: REDIS_HOST,
-  port: REDIS_PORT,
-});
-
-redisPublisher.on('error', (err) => {
-  console.error('[Redis Publisher] Connection error:', err.message || err);
-});
-
 app.use(express.json());
 
-// Mount the modular Bull Board dashboard router under the /ui prefix
-app.use('/bull', dashboardRouter);
-
 // Shared processor function to evaluate submissions
-const processJob = async (job, isRunOnly) => {
-  const { submissionId, problemId, code, language } = job.data;
+const processJob = async (task) => {
+  const { submissionId, problemId, code, language, isRunOnly } = task;
   const queueLabel = isRunOnly ? 'Run' : 'Submit';
   console.log(`[Worker - ${queueLabel}] Processing submission ${submissionId} for problem ${problemId} (${language})`);
 
   try {
-    // 1. Publish "RUNNING" state to Redis Pub/Sub for the Socket & Submission Services
-    await redisPublisher.publish(
-      'submission:update',
-      JSON.stringify({
-        submissionId,
-        status: 'RUNNING',
-      })
-    );
+    // 1. Publish "RUNNING" state to Kafka topic submission-results
+    await producer.send({
+      topic: 'submission-results',
+      messages: [{
+        key: submissionId,
+        value: JSON.stringify({
+          submissionId,
+          status: 'RUNNING',
+        })
+      }]
+    });
 
     // 2. Fetch problem parameters and test cases from database
     const problem = await prisma.problem.findUnique({
@@ -78,81 +64,72 @@ const processJob = async (job, isRunOnly) => {
 
     console.log(`[Worker - ${queueLabel}] Evaluation completed for ${submissionId}. Result: ${result.status}`);
 
-    // 5. Publish the final outcome to Redis Pub/Sub for the Socket & Submission Services
-    await redisPublisher.publish(
-      'submission:update',
-      JSON.stringify({
-        submissionId,
-        status: result.status,
-        executionTime: result.executionTime,
-        executionMemory: result.executionMemory,
-        errorDetails: result.errorDetails,
-      })
-    );
+    // 5. Publish the final outcome to Kafka topic submission-results
+    await producer.send({
+      topic: 'submission-results',
+      messages: [{
+        key: submissionId,
+        value: JSON.stringify({
+          submissionId,
+          status: result.status,
+          executionTime: result.executionTime,
+          executionMemory: result.executionMemory,
+          errorDetails: result.errorDetails,
+        })
+      }]
+    });
 
   } catch (err) {
-    console.error(`[Worker - ${queueLabel}] Error running job ${job.id}:`, err);
+    console.error(`[Worker - ${queueLabel}] Error running job ${submissionId}:`, err);
 
-    // Notify users & Submission Service via Pub/Sub about the crash
-    await redisPublisher.publish(
-      'submission:update',
-      JSON.stringify({
-        submissionId,
-        status: 'RUNTIME_ERROR',
-        errorDetails: err.message,
-      })
-    );
+    // Notify users & Submission Service via Kafka about the crash
+    await producer.send({
+      topic: 'submission-results',
+      messages: [{
+        key: submissionId,
+        value: JSON.stringify({
+          submissionId,
+          status: 'RUNTIME_ERROR',
+          errorDetails: err.message,
+        })
+      }]
+    });
   }
 };
-
-// Create the run-queue worker
-const runWorker = new Worker(
-  'run-queue',
-  async (job) => await processJob(job, true),
-  {
-    connection: {
-      host: REDIS_HOST,
-      port: REDIS_PORT,
-    },
-    concurrency: 2,
-  }
-);
-
-// Create the submit-queue worker
-const submitWorker = new Worker(
-  'submit-queue',
-  async (job) => await processJob(job, false),
-  {
-    connection: {
-      host: REDIS_HOST,
-      port: REDIS_PORT,
-    },
-    concurrency: 2,
-  }
-);
-
-// Setup event listeners for logging
-runWorker.on('completed', (job) => {
-  console.log(`[Run Worker] Job ${job.id} completed`);
-});
-runWorker.on('failed', (job, err) => {
-  console.error(`[Run Worker] Job ${job.id} failed:`, err);
-});
-
-submitWorker.on('completed', (job) => {
-  console.log(`[Submit Worker] Job ${job.id} completed`);
-});
-submitWorker.on('failed', (job, err) => {
-  console.error(`[Submit Worker] Job ${job.id} failed:`, err);
-});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'codexis-evaluator-service' });
 });
 
-// Start Express server for Bull Board
+// Run system recovery sweeper on boot to clean any orphan containers from previous crashes
+await sweepOrphansOnBoot();
+
+// Connect to Kafka and start consuming messages
+const runConsumer = async () => {
+  await connectKafka();
+  
+  await consumer.subscribe({ topic: 'submission-tasks', fromBeginning: false });
+  
+  await consumer.run({
+    eachMessage: async ({ topic, partition, message }) => {
+      try {
+        const task = JSON.parse(message.value.toString());
+        await processJob(task);
+      } catch (err) {
+        console.error('[Kafka Consumer] Error processing message:', err.message || err);
+      }
+    }
+  });
+
+  console.log('[Evaluator Service] Kafka consumer listening to topic: submission-tasks');
+};
+
+runConsumer().catch(err => {
+  console.error('[Evaluator Service] Failed to start Kafka consumer:', err);
+});
+
+// Start Express server for API endpoints (like healthcheck)
 app.listen(PORT, () => {
-  console.log(`[Evaluator Service] Queue monitor dashboard active at http://localhost:${PORT}/bull`);
-  console.log(`[Evaluator Service] Workers are listening to run-queue and submit-queue...`);
+  console.log(`[Evaluator Service] Running on port ${PORT}`);
 });

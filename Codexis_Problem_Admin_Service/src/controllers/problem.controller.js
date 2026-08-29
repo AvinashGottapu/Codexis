@@ -269,6 +269,18 @@ export const updateProblem = async (req, res) => {
     // Active Cache Invalidation & Sync: Clear detailed view and update metadata
     await redis.del(`cache:problem:${id}`);
 
+    // Active Cache Invalidation: Clear dependent execution caches indexed under this problem
+    try {
+      const submissionsIndexKey = `cache:problem:submissions:${id}`;
+      const cachedKeys = await redis.smembers(submissionsIndexKey);
+      if (cachedKeys.length > 0) {
+        await redis.unlink(...cachedKeys, submissionsIndexKey);
+        console.log(`[Cache Invalidation] Successfully cleared ${cachedKeys.length} cached solutions for problem ${id}`);
+      }
+    } catch (cacheErr) {
+      console.error('[Cache Error] Failed to invalidate execution caches:', cacheErr.message);
+    }
+
     const basicMetadata = {
       id: updated.id,
       title: updated.title,
@@ -311,6 +323,18 @@ export const removeProblem = async (req, res) => {
     await redis.zrem('cache:problems:index', id);
     await redis.del(`cache:problem:${id}`);
     await redis.del(`cache:problem:metadata:${id}`);
+
+    // Active Cache Invalidation: Clear dependent execution caches indexed under this problem
+    try {
+      const submissionsIndexKey = `cache:problem:submissions:${id}`;
+      const cachedKeys = await redis.smembers(submissionsIndexKey);
+      if (cachedKeys.length > 0) {
+        await redis.unlink(...cachedKeys, submissionsIndexKey);
+        console.log(`[Cache Invalidation] Successfully cleared ${cachedKeys.length} cached solutions for problem ${id}`);
+      }
+    } catch (cacheErr) {
+      console.error('[Cache Error] Failed to invalidate execution caches:', cacheErr.message);
+    }
     console.log(`[Cache] DELETED - Removed problem ${id} from ZSET index and cleared caches`);
 
     return res.json({ message: 'Problem deleted successfully' });

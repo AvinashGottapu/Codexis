@@ -30,7 +30,10 @@ export const createSubmission = async (data) => {
       problemId: data.problemId,
       code: data.code,
       language: data.language,
-      status: 'PENDING',
+      status: data.status || 'PENDING',
+      executionTime: data.executionTime ?? null,
+      executionMemory: data.executionMemory ?? null,
+      errorDetails: data.errorDetails ?? null,
     },
   });
 };
@@ -97,4 +100,37 @@ export const verifyProblemExists = async (problemId) => {
   // Fallback to HTTP REST call if cache check fails or is a miss
   const problem = await fetchProblemDetails(problemId);
   return problem !== null;
+};
+
+/**
+ * Aggregate submission status counts and execution time distribution (5 buckets) using Prisma raw query
+ */
+export const getSubmissionStatsByProblemId = async (problemId) => {
+  // 1. Group submissions by status
+  const statusCounts = await prisma.submission.groupBy({
+    by: ['status'],
+    where: { problemId },
+    _count: {
+      _all: true,
+    },
+  });
+
+  // 2. Fetch 5-bucket distribution for ACCEPTED runs (0-2000 ms range)
+  const timeDistribution = await prisma.$queryRaw`
+    SELECT 
+      WIDTH_BUCKET("executionTime", 0, 2000, 5)::int as time_bucket,
+      COUNT(*)::int as count
+    FROM "Submission"
+    WHERE "problemId" = ${problemId} AND status = 'ACCEPTED' AND "executionTime" IS NOT NULL
+    GROUP BY time_bucket
+    ORDER BY time_bucket ASC;
+  `;
+
+  return {
+    statusCounts: statusCounts.map((item) => ({
+      status: item.status,
+      count: item._count._all,
+    })),
+    timeDistribution,
+  };
 };

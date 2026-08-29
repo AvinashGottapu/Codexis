@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { LANG_CONFIGS } from './language.config.js';
-import { compileCode, runTestcase } from './docker.js';
+import { compileCode, createPersistentContainer, runExecTestcase } from './docker.js';
 
 // Ensure temp directory exists in the workspace
 const tempRoot = path.join(process.cwd(), 'temp-submissions');
@@ -71,6 +71,7 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
 
   const submissionDir = path.join(tempRoot, submissionId);
 
+  let container = null;
   try {
     // 1. Create temporary workspace and write solution file
     await fs.promises.mkdir(submissionDir, { recursive: true });
@@ -82,7 +83,6 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
       console.log(`[Sandbox] Compiling submission ${submissionId} (${language})...`);
       const compileResult = await compileCode(submissionId, submissionDir, config);
       if (!compileResult.success) {
-        await cleanup(submissionDir);
         return {
           status: 'COMPILATION_ERROR',
           errorDetails: compileResult.errorDetails,
@@ -90,17 +90,22 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
       }
     }
 
-    // 3. Run all testcases sequentially
+    // 3. Start the single persistent container
+    // Intially we did one contanier for one testcase but now one container for all testcases 
+    // This is Fast.. creation of a container is Cold start..
+    console.log(`[Sandbox] Starting persistent container for submission ${submissionId}...`);
+    container = await createPersistentContainer(submissionId, submissionDir, config, memoryLimitMb);
+
+    // 4. Run all testcases sequentially
     console.log(`[Sandbox] Running ${testcases.length} test cases for ${submissionId}...`);
     let maxTime = 0;
 
     for (let i = 0; i < testcases.length; i++) {
       const tc = testcases[i];
-      const runResult = await runTestcase(submissionId, submissionDir, config, tc.input, timeLimitMs, memoryLimitMb);
+      const runResult = await runExecTestcase(container, submissionDir, config, tc.input, timeLimitMs);
 
       // If one of the test cases fails constraints, abort immediately
       if (runResult.status !== 'SUCCESS') {
-        await cleanup(submissionDir);
         return {
           status: runResult.status,
           executionTime: runResult.executionTime,
@@ -116,7 +121,6 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
 
       // Compare outputs exactly
       if (cleanStdout !== cleanExpected) {
-        await cleanup(submissionDir);
         return {
           status: 'WRONG_ANSWER',
           executionTime: runResult.executionTime,
@@ -126,7 +130,6 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
     }
 
     // All test cases passed successfully!
-    await cleanup(submissionDir);
     return {
       status: 'ACCEPTED',
       executionTime: maxTime,
@@ -135,10 +138,20 @@ export const evaluateSubmission = async (submissionId, code, language, testcases
 
   } catch (err) {
     console.error(`[Sandbox] Critical error during evaluation of ${submissionId}:`, err);
-    await cleanup(submissionDir);
     return {
       status: 'RUNTIME_ERROR',
       errorDetails: err.message,
     };
+  } finally {
+    // 5. Always clean up container and submission directory
+    if (container) {
+      try {
+        await container.kill();
+      } catch (e) {}
+      try {
+        await container.remove();
+      } catch (e) {}
+    }
+    await cleanup(submissionDir);
   }
 };

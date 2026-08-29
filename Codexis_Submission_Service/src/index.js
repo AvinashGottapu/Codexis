@@ -2,8 +2,9 @@ import Fastify from 'fastify';
 import dotenv from 'dotenv';
 import submissionRoutes from './routes/submission.routes.js';
 import leaderboardRoutes from './routes/leaderboard.routes.js';
-import { initRedisSubscriber } from './services/redisSubscriber.js';
+import { initKafkaSubscriber } from './services/kafkaSubscriber.js';
 import { initLeaderboardReconciler } from './services/leaderboardReconciler.js';
+import { connectKafka, initializeTopics } from './config/kafka.js';
 
 dotenv.config();
 
@@ -13,8 +14,7 @@ const fastify = Fastify({ logger: true });
 fastify.register(submissionRoutes, { prefix: '/api/submissions' });
 fastify.register(leaderboardRoutes, { prefix: '/api/leaderboard' });
 
-// Initialize Redis Subscriber to sync database statuses from evaluator
-initRedisSubscriber();
+
 
 // Initialize the background Leaderboard Reconciler (Eventual Consistency)
 initLeaderboardReconciler();
@@ -28,6 +28,12 @@ fastify.get('/health', async () => {
 const start = async () => {
   const PORT = parseInt(process.env.PORT || '3003', 10);
   try {
+    await connectKafka();
+    await initializeTopics();
+    
+    // Initialize Kafka Subscriber to sync database statuses from evaluator
+    await initKafkaSubscriber();
+
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`[Submission Service] Running on port ${PORT}`);
   } catch (err) {

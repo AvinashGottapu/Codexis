@@ -23,6 +23,9 @@ redisClient.on('error', (err) => {
  * 2. If empty (cold start), queries PostgreSQL to build the cache, then returns it.
  * 3. Resolves User IDs to profiles (usernames, imageUrls) in a single database hit.
  */
+
+
+
 export const getLeaderboard = async (request, reply) => {
   try {
     // 1. Fetch top 50 from Redis Sorted Set

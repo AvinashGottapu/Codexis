@@ -91,6 +91,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('description');
   const [submissionsHistory, setSubmissionsHistory] = useState([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(false);
+  const [stats, setStats] = useState(null);
+  const [loadingStats, setLoadingStats] = useState(false);
+  const [statsSubTab, setStatsSubTab] = useState('breakdown');
   const [leftView, setLeftView] = useState('problems');
   const [leaderboard, setLeaderboard] = useState([]);
   const [loadingLeaderboard, setLoadingLeaderboard] = useState(false);
@@ -252,12 +255,41 @@ export default function App() {
     }
   };
 
-  // Load submissions history when tab is clicked or user log state changes
+  // Load submissions history when user log state changes or on mount
   useEffect(() => {
-    if (userId && activeTab === 'submissions') {
+    if (userId) {
       fetchSubmissionsHistory();
     }
-  }, [userId, activeTab]);
+  }, [userId]);
+
+  // Fetch submission stats for the selected problem
+  const fetchProblemStats = async () => {
+    if (!selectedProblemId || !userId) return;
+    setLoadingStats(true);
+    try {
+      const token = await getToken();
+      const res = await fetch(`${GATEWAY_URL}/api/submissions/problem/${selectedProblemId}/stats`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setStats(data);
+      }
+    } catch (err) {
+      console.error('[Frontend] Failed to fetch problem stats:', err);
+    } finally {
+      setLoadingStats(false);
+    }
+  };
+
+  // Load stats when stats tab is clicked or user selection changes
+  useEffect(() => {
+    if (userId && activeTab === 'stats') {
+      fetchProblemStats();
+    }
+  }, [userId, activeTab, selectedProblemId]);
 
   // 3. Fetch problem details when selected problem changes
   useEffect(() => {
@@ -378,6 +410,36 @@ export default function App() {
       const submission = await res.json();
       const submissionId = submission.id;
       addLog('System', `Submission created! ID: ${submissionId.substring(0, 8)}...`, 'success');
+
+      if (submission.status && submission.status !== 'PENDING') {
+        // Cache Hit! Render result directly without setting up WebSockets
+        setFinalStatus(submission.status);
+        if (submission.status === 'ACCEPTED') {
+          addLog('Evaluator', 'SUCCESS: All test cases passed! (Cached Result) ✅', 'success');
+          if (submission.executionTime !== null && submission.executionTime !== undefined) {
+            addLog('Evaluator', `Max Execution Time: ${submission.executionTime} ms`, 'success');
+          }
+          if (submission.executionMemory !== null && submission.executionMemory !== undefined) {
+            addLog('Evaluator', `Mock Memory Usage: ${(submission.executionMemory / 1024).toFixed(2)} MB`, 'success');
+          }
+        } else if (submission.status === 'WRONG_ANSWER') {
+          addLog('Evaluator', 'FAILED: Incorrect outputs detected. Status: WRONG_ANSWER (Cached) ❌', 'error');
+        } else if (submission.status === 'COMPILATION_ERROR') {
+          addLog('Evaluator', 'FAILED: Code compilation failed. Status: COMPILATION_ERROR (Cached) ❌', 'error');
+        } else if (submission.status === 'TIME_LIMIT_EXCEEDED') {
+          addLog('Evaluator', 'FAILED: Solution exceeded the time limit. Status: TIME_LIMIT_EXCEEDED (Cached) ⏳', 'error');
+        } else {
+          addLog('Evaluator', `FAILED: Status: ${submission.status} (Cached) ❌`, 'error');
+        }
+        
+        // Refresh history and stats
+        fetchSubmissionsHistory();
+        fetchLeaderboard();
+        fetchProblemStats();
+        setIsSubmitting(false);
+        return;
+      }
+
       addLog('System', 'Connecting to real-time events socket via API Gateway...', 'info');
 
       // Initialize Socket connection
@@ -447,6 +509,7 @@ export default function App() {
           // Refresh user history and leaderboard rankings
           fetchSubmissionsHistory();
           fetchLeaderboard();
+          fetchProblemStats();
         } else if (status === 'WRONG_ANSWER') {
           addLog('Evaluator', 'FAILED: Incorrect outputs detected. Status: WRONG_ANSWER ❌', 'error');
           if (errorDetails) {
@@ -469,8 +532,9 @@ export default function App() {
         // Close connection once terminal state is received
         cleanupSocket();
         setIsSubmitting(false);
-        // Refresh submissions history list
+        // Refresh submissions history list & stats
         fetchSubmissionsHistory();
+        fetchProblemStats();
       }
     });
 
@@ -777,11 +841,21 @@ export default function App() {
                   >
                     My Submissions
                   </button>
+                  <button 
+                    className={`px-6 py-3 text-xs font-bold uppercase tracking-wider border-b-2 cursor-pointer transition-all duration-200 ${
+                      activeTab === 'stats' 
+                        ? 'border-purple-500 text-white bg-slate-900/40' 
+                        : 'border-transparent text-slate-400 hover:text-slate-200'
+                    }`}
+                    onClick={() => setActiveTab('stats')}
+                  >
+                    Stats & Analytics
+                  </button>
                 </div>
 
                 {/* Tab content area */}
                 <div className="flex-1 overflow-y-auto p-6 flex flex-col gap-6">
-                  {activeTab === 'description' ? (
+                  {activeTab === 'description' && (
                     <>
                       <div>
                         <h2 className="text-2xl font-extrabold text-white mb-2">{problemDetail.title}</h2>
@@ -835,15 +909,16 @@ export default function App() {
                         </div>
                       )}
                     </>
-                  ) : (
-                    // Submissions History Tab
+                  )}
+
+                  {activeTab === 'submissions' && (
                     <div className="flex-1 flex flex-col gap-4">
                       <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">My Submissions History</h3>
                       
                       {!userId ? (
                         <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center py-12">
                           <div className="w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center">
-                            <Activity className="w-5 h-5 text-slate-505" />
+                            <Activity className="w-5 h-5 text-slate-550" />
                           </div>
                           <div>
                             <h4 className="text-sm font-bold text-white mb-1">Authentication Required</h4>
@@ -918,6 +993,191 @@ export default function App() {
                           })}
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {activeTab === 'stats' && (
+                    <div className="flex-1 flex flex-col gap-6">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Problem Analytics & Statistics</h3>
+                        <button
+                          onClick={fetchProblemStats}
+                          disabled={loadingStats}
+                          className="p-1.5 rounded-lg border border-slate-800 hover:border-purple-500/50 hover:text-purple-400 text-slate-500 bg-slate-950/40 transition-colors cursor-pointer"
+                          title="Refresh Stats"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${loadingStats ? 'animate-spin' : ''}`} />
+                        </button>
+                      </div>
+
+                      {!userId ? (
+                        <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center py-12">
+                          <div className="w-12 h-12 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center">
+                            <Activity className="w-5 h-5 text-slate-550" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-white mb-1">Authentication Required</h4>
+                            <p className="text-xs text-slate-550 max-w-xs leading-relaxed">
+                              Sign in to view real-time community statistics and performance distributions.
+                            </p>
+                          </div>
+                          <SignInButton mode="modal">
+                            <button className="text-xs font-bold px-4 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white cursor-pointer shadow-md shadow-purple-950/20">
+                              Sign In
+                            </button>
+                          </SignInButton>
+                        </div>
+                      ) : loadingStats ? (
+                        <div className="flex-1 flex items-center justify-center py-12 text-slate-505 text-xs gap-2">
+                          <RefreshCw className="w-4 h-4 animate-spin text-purple-500" />
+                          <span>Loading problem analytics...</span>
+                        </div>
+                      ) : !stats || (!stats.statusCounts || stats.statusCounts.length === 0) ? (
+                        <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center py-12 text-slate-505 text-xs">
+                          <Activity className="w-6 h-6 opacity-30" />
+                          <span>No submission records found for this problem yet.</span>
+                        </div>
+                      ) : (() => {
+                        const totalSubmissions = stats.statusCounts.reduce((acc, curr) => acc + curr.count, 0);
+                        const acceptedCount = stats.statusCounts.find(s => s.status === 'ACCEPTED')?.count || 0;
+                        const acceptanceRate = totalSubmissions > 0 ? ((acceptedCount / totalSubmissions) * 100).toFixed(1) : '0.0';
+
+                        const bucketCounts = Array(5).fill(0);
+                        stats.timeDistribution?.forEach(td => {
+                          const idx = td.time_bucket - 1;
+                          if (idx >= 0 && idx < 5) {
+                            bucketCounts[idx] = td.count;
+                          }
+                        });
+                        const maxBucketCount = Math.max(...bucketCounts, 1);
+
+                        return (
+                          <div className="flex flex-col gap-6 overflow-y-auto pr-1">
+                            {/* Summary Cards */}
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-xl flex flex-col gap-1">
+                                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Total Submissions</span>
+                                <span className="text-xl font-bold text-white">{totalSubmissions}</span>
+                              </div>
+                              <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-xl flex flex-col gap-1">
+                                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Accepted Runs</span>
+                                <span className="text-xl font-bold text-emerald-400">{acceptedCount}</span>
+                              </div>
+                              <div className="bg-slate-950/40 border border-slate-850 p-4 rounded-xl flex flex-col gap-1">
+                                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Acceptance Rate</span>
+                                <span className="text-xl font-bold text-purple-400">{acceptanceRate}%</span>
+                              </div>
+                            </div>
+
+                            {/* Sub-tab Switcher (Segment Control) */}
+                            <div className="flex bg-slate-950/40 border border-slate-850 rounded-xl p-1 gap-1 shrink-0">
+                              <button
+                                onClick={() => setStatsSubTab('breakdown')}
+                                className={`flex-1 text-center py-2 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                                  statsSubTab === 'breakdown'
+                                    ? 'bg-purple-600/90 text-white shadow-md shadow-purple-950/20'
+                                    : 'text-slate-400 hover:text-slate-200'
+                                }`}
+                              >
+                                Status Breakdown
+                              </button>
+                              <button
+                                onClick={() => setStatsSubTab('distribution')}
+                                className={`flex-1 text-center py-2 rounded-lg text-xs font-bold transition-all duration-200 cursor-pointer ${
+                                  statsSubTab === 'distribution'
+                                    ? 'bg-purple-600/90 text-white shadow-md shadow-purple-950/20'
+                                    : 'text-slate-400 hover:text-slate-200'
+                                }`}
+                              >
+                                Performance Distribution
+                              </button>
+                            </div>
+
+                            {/* Core charts container */}
+                            <div className="flex flex-col gap-6 items-stretch">
+                              {statsSubTab === 'breakdown' && (
+                                /* Status Breakdown Panel */
+                                <div className="bg-slate-950/20 border border-slate-850 rounded-xl p-4 flex flex-col gap-4">
+                                  <h4 className="text-xs font-bold text-slate-350 uppercase tracking-wider border-b border-slate-850 pb-2">Submission Status Breakdown</h4>
+                                  <div className="flex flex-col gap-3">
+                                    {stats.statusCounts.map(item => {
+                                      const percent = ((item.count / totalSubmissions) * 100).toFixed(1);
+                                      let barColor = "bg-red-500";
+                                      let textColor = "text-red-400 border-red-950/50 bg-red-950/20";
+                                      if (item.status === 'ACCEPTED') {
+                                        barColor = "bg-emerald-500";
+                                        textColor = "text-emerald-400 border-emerald-950/50 bg-emerald-950/20";
+                                      } else if (item.status === 'RUNNING' || item.status === 'PENDING') {
+                                        barColor = "bg-purple-500";
+                                        textColor = "text-purple-400 border-purple-950/50 bg-purple-950/20";
+                                      } else if (item.status === 'WRONG_ANSWER') {
+                                        barColor = "bg-amber-500";
+                                        textColor = "text-amber-400 border-amber-950/50 bg-amber-950/20";
+                                      }
+                                      return (
+                                        <div key={item.status} className="flex flex-col gap-1.5">
+                                          <div className="flex justify-between items-center text-xs">
+                                            <span className={`text-[10px] px-2 py-0.5 rounded border font-mono font-bold ${textColor}`}>
+                                              {item.status}
+                                            </span>
+                                            <span className="text-slate-400 font-semibold">{item.count} ({percent}%)</span>
+                                          </div>
+                                          <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-850">
+                                            <div className={`h-full rounded-full ${barColor}`} style={{ width: `${percent}%` }} />
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {statsSubTab === 'distribution' && (
+                                /* Time distribution chart */
+                                <div className="bg-slate-950/20 border border-slate-850 rounded-xl p-4 flex flex-col gap-4">
+                                  <h4 className="text-xs font-bold text-slate-350 uppercase tracking-wider border-b border-slate-850 pb-2">Accepted Execution Times</h4>
+                                  
+                                  {stats.timeDistribution && stats.timeDistribution.length > 0 ? (
+                                    <div className="flex flex-col gap-4">
+                                      {/* Column layout histogram */}
+                                      <div className="h-40 flex items-end gap-3 px-2 pt-4">
+                                        {bucketCounts.map((count, index) => {
+                                          const percentHeight = ((count / maxBucketCount) * 100);
+                                          return (
+                                            <div key={index} className="flex-1 flex flex-col items-center justify-end h-full group relative">
+                                              {/* Hover Tooltip */}
+                                              <div className="absolute bottom-full mb-2 bg-slate-900 border border-slate-800 text-[10px] text-slate-200 px-2 py-1 rounded shadow-xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 font-bold whitespace-nowrap z-10">
+                                                {count} submissions
+                                              </div>
+                                              
+                                              {/* Bar */}
+                                              <div 
+                                                className="w-full rounded-t-lg bg-gradient-to-t from-purple-600 to-indigo-500 group-hover:from-purple-500 group-hover:to-indigo-400 transition-all duration-300 relative shadow-lg shadow-purple-950/30"
+                                                style={{ height: `${Math.max(percentHeight, 4)}%` }}
+                                              />
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                      {/* X-Axis labels */}
+                                      <div className="flex gap-3 px-2 text-[9px] font-mono font-bold text-slate-500">
+                                        {["0-400ms", "400-800ms", "800-1200ms", "1200-1600ms", "1600+ms"].map((lbl, idx) => (
+                                          <span key={idx} className="flex-1 text-center truncate">{lbl}</span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="h-44 flex flex-col items-center justify-center gap-1.5 text-center text-slate-650 text-xs">
+                                      <Cpu className="w-5 h-5 opacity-30 animate-pulse" />
+                                      <span>No accepted execution runs to measure.</span>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
