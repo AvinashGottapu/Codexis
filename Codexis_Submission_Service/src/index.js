@@ -5,6 +5,7 @@ import leaderboardRoutes from './routes/leaderboard.routes.js';
 import { initKafkaSubscriber } from './services/kafkaSubscriber.js';
 import { initLeaderboardReconciler } from './services/leaderboardReconciler.js';
 import { connectKafka, initializeTopics } from './config/kafka.js';
+import { initWorkerMonitor } from './services/workerMonitor.js';
 
 dotenv.config();
 
@@ -33,6 +34,9 @@ const start = async () => {
     
     // Initialize Kafka Subscriber to sync database statuses from evaluator
     await initKafkaSubscriber();
+
+    // Start the Worker Failure Detection Daemon
+    initWorkerMonitor();
 
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`[Submission Service] Running on port ${PORT}`);

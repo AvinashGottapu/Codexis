@@ -6,6 +6,7 @@ import { prisma } from './config/db.js';
 import { evaluateSubmission } from './sandbox/sandbox.manager.js';
 import { sweepOrphansOnBoot } from './sandbox/docker.js';
 import { producer, consumer, connectKafka } from './config/kafka.js';
+import { registerWorker, setActiveJob, clearActiveJob } from './services/workerRegistry.js';
 
 dotenv.config();
 
@@ -19,6 +20,9 @@ const processJob = async (task) => {
   const { submissionId, problemId, code, language, isRunOnly } = task;
   const queueLabel = isRunOnly ? 'Run' : 'Submit';
   console.log(`[Worker - ${queueLabel}] Processing submission ${submissionId} for problem ${problemId} (${language})`);
+
+  // Register that this worker is busy with this active job
+  await setActiveJob(submissionId);
 
   try {
     // 1. Publish "RUNNING" state to Kafka topic submission-results
@@ -94,6 +98,9 @@ const processJob = async (task) => {
         })
       }]
     });
+  } finally {
+    // Reset worker state to IDLE and clear activeJobId
+    await clearActiveJob();
   }
 };
 
@@ -107,6 +114,9 @@ await sweepOrphansOnBoot();
 
 // Connect to Kafka and start consuming messages
 const runConsumer = async () => {
+  // Register this worker instance in Redis on startup
+  await registerWorker();
+
   await connectKafka();
   
   await consumer.subscribe({ topic: 'submission-tasks', fromBeginning: false });
