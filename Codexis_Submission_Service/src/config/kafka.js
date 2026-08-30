@@ -8,6 +8,11 @@ const KAFKA_BROKERS = process.env.KAFKA_BROKERS || 'localhost:9092,localhost:909
 const kafka = new Kafka({
   clientId: 'submission-service',
   brokers: KAFKA_BROKERS.split(','),
+  retry: {
+    initialRetryTime: 500, // wait 500ms on first retry
+    retries: 5,            // retry up to 5 times (exponential backoff)
+    factor: 2,             // double the delay on each attempt (0.5s, 1s, 2s, 4s, 8s)
+  }
 });
 
 export const producer = kafka.producer();

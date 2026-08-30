@@ -14,6 +14,7 @@ import {
   releaseJobLock, 
   markJobProcessed 
 } from './services/workerRegistry.js';
+import { retryWithBackoff } from './utils/retry.js';
 
 dotenv.config();
 
@@ -32,10 +33,16 @@ const processJob = async (task) => {
   // We check Redis first because it is in-memory and takes less than 1ms.
   // This prevents running duplicates if another worker is currently processing this job.
   if (!isRunOnly) {
-    const isLockedOrDone = await acquireJobLock(submissionId);
-    if (isLockedOrDone) {
-      console.warn(`[Idempotency Guard] Skipping submission ${submissionId} (already processing or processed)`);
-      return;
+    try {
+      const isLockedOrDone = await acquireJobLock(submissionId);
+      if (isLockedOrDone) {
+        console.warn(`[Idempotency Guard] Skipping submission ${submissionId} (already processing or processed)`);
+        return;
+      }
+    } catch (redisErr) {
+      // If Redis has a command timeout or is temporarily unreachable, we FAIL OPEN.
+      // We do not crash or skip the job, because PostgreSQL will still protect us at the next step!
+      console.warn(`[Idempotency Guard] Redis lock check glitched: ${redisErr.message || redisErr}. Falling back to PostgreSQL for safety check.`);
     }
   }
 
@@ -44,9 +51,11 @@ const processJob = async (task) => {
   // or were cleared, this check guarantees we still skip completed/failed runs.
   if (!isRunOnly) {
     try {
-      // Query the database directly using raw SQL since Submission is not defined in the local schema
-      const dbSubmissions = await prisma.$queryRaw`SELECT status FROM "Submission" WHERE id = ${submissionId}`;
-      const dbSubmission = dbSubmissions[0];
+      // Query the database directly using raw SQL with automatic exponential backoff retries on transient connection drops
+      const dbSubmission = await retryWithBackoff(async () => {
+        const dbSubmissions = await prisma.$queryRaw`SELECT status FROM "Submission" WHERE id = ${submissionId}`;
+        return dbSubmissions[0];
+      }, 3, 500, 2);
 
       if (dbSubmission && (
         dbSubmission.status === 'ACCEPTED' ||

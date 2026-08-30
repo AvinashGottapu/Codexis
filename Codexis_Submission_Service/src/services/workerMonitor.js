@@ -28,13 +28,16 @@ export const checkWorkerHealth = async () => {
         if (activeJobId) {
           console.warn(`[Worker Monitor] Worker was running active job ${activeJobId}. Initiating recovery...`);
 
-          // Increment the retry count for this submission in Redis (expires in 1 hour)
-          const retryKey = `codexis:submissions:retries:${activeJobId}`;
-          const currentRetries = await redisClient.incr(retryKey);
-          await redisClient.expire(retryKey, 3600);
+          // Add the dead worker's ID to the set of crashed workers (idempotent, prevents double-counting on retry)
+          const retrySetKey = `codexis:submissions:crashed_workers:${activeJobId}`;
+          await redisClient.sadd(retrySetKey, workerId);
+          await redisClient.expire(retrySetKey, 3600);
 
-          if (currentRetries <= 3) {
-            console.log(`[Worker Monitor] Interrupted job ${activeJobId} detected (Attempt ${currentRetries}/3). Setting DB status to PENDING. Relying on Kafka native redelivery.`);
+          // Get the number of unique worker crashes
+          const uniqueCrashes = await redisClient.scard(retrySetKey);
+
+          if (uniqueCrashes <= 3) {
+            console.log(`[Worker Monitor] Interrupted job ${activeJobId} detected (Unique Crashes: ${uniqueCrashes}/3). Setting DB status to PENDING. Relying on Kafka native redelivery.`);
 
             // Update status in database back to PENDING so UI stays updated
             await prisma.submission.update({
@@ -67,7 +70,7 @@ export const checkWorkerHealth = async () => {
             });
             
             // Clean up the retry counter key
-            await redisClient.del(retryKey);
+            await redisClient.del(retrySetKey);
           }
         }
 
