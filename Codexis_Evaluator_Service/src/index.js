@@ -6,7 +6,14 @@ import { prisma } from './config/db.js';
 import { evaluateSubmission } from './sandbox/sandbox.manager.js';
 import { sweepOrphansOnBoot } from './sandbox/docker.js';
 import { producer, consumer, connectKafka } from './config/kafka.js';
-import { registerWorker, setActiveJob, clearActiveJob } from './services/workerRegistry.js';
+import { 
+  registerWorker, 
+  setActiveJob, 
+  clearActiveJob, 
+  acquireJobLock, 
+  releaseJobLock, 
+  markJobProcessed 
+} from './services/workerRegistry.js';
 
 dotenv.config();
 
@@ -20,6 +27,43 @@ const processJob = async (task) => {
   const { submissionId, problemId, code, language, isRunOnly } = task;
   const queueLabel = isRunOnly ? 'Run' : 'Submit';
   console.log(`[Worker - ${queueLabel}] Processing submission ${submissionId} for problem ${problemId} (${language})`);
+
+  // 🛡️ Step B: Redis Idempotency Lock (Active Lock check)
+  // We check Redis first because it is in-memory and takes less than 1ms.
+  // This prevents running duplicates if another worker is currently processing this job.
+  if (!isRunOnly) {
+    const isLockedOrDone = await acquireJobLock(submissionId);
+    if (isLockedOrDone) {
+      console.warn(`[Idempotency Guard] Skipping submission ${submissionId} (already processing or processed)`);
+      return;
+    }
+  }
+
+  // 🛡️ Step A: PostgreSQL Status Guard (Fallback precheck)
+  // The database is the absolute source of truth. If the Redis cache keys expired
+  // or were cleared, this check guarantees we still skip completed/failed runs.
+  if (!isRunOnly) {
+    try {
+      // Query the database directly using raw SQL since Submission is not defined in the local schema
+      const dbSubmissions = await prisma.$queryRaw`SELECT status FROM "Submission" WHERE id = ${submissionId}`;
+      const dbSubmission = dbSubmissions[0];
+
+      if (dbSubmission && (
+        dbSubmission.status === 'ACCEPTED' ||
+        dbSubmission.status === 'WRONG_ANSWER' ||
+        dbSubmission.status === 'RUNTIME_ERROR' ||
+        dbSubmission.status === 'TIME_LIMIT_EXCEEDED'
+      )) {
+        console.warn(`[Status Guard] Skipping submission ${submissionId} as it is already processed in PostgreSQL.`);
+        // Cache the processed key back in Redis for fast caching next time
+        await markJobProcessed(submissionId);
+        await releaseJobLock(submissionId); // Clean up the active lock
+        return;
+      }
+    } catch (dbErr) {
+      console.error(`[Status Guard] Database precheck failed:`, dbErr.message || dbErr);
+    }
+  }
 
   // Register that this worker is busy with this active job
   await setActiveJob(submissionId);
@@ -83,6 +127,11 @@ const processJob = async (task) => {
       }]
     });
 
+    // Cache the processed result in Redis
+    if (!isRunOnly) {
+      await markJobProcessed(submissionId);
+    }
+
   } catch (err) {
     console.error(`[Worker - ${queueLabel}] Error running job ${submissionId}:`, err);
 
@@ -98,7 +147,16 @@ const processJob = async (task) => {
         })
       }]
     });
+
+    // Cache the failure result in Redis to prevent repeating
+    if (!isRunOnly) {
+      await markJobProcessed(submissionId);
+    }
   } finally {
+    // Release the Redis execution lock
+    if (!isRunOnly) {
+      await releaseJobLock(submissionId);
+    }
     // Reset worker state to IDLE and clear activeJobId
     await clearActiveJob();
   }

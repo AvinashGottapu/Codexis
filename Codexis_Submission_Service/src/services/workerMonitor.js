@@ -34,37 +34,13 @@ export const checkWorkerHealth = async () => {
           await redisClient.expire(retryKey, 3600);
 
           if (currentRetries <= 3) {
-            console.log(`[Worker Monitor] Re-queuing job ${activeJobId} (Attempt ${currentRetries}/3)`);
+            console.log(`[Worker Monitor] Interrupted job ${activeJobId} detected (Attempt ${currentRetries}/3). Setting DB status to PENDING. Relying on Kafka native redelivery.`);
 
-            // Fetch submission detail from database
-            const submission = await prisma.submission.findUnique({
+            // Update status in database back to PENDING so UI stays updated
+            await prisma.submission.update({
               where: { id: activeJobId },
+              data: { status: 'PENDING' },
             });
-
-            if (submission) {
-              // 1. Update status in database back to PENDING
-              await prisma.submission.update({
-                where: { id: activeJobId },
-                data: { status: 'PENDING' },
-              });
-
-              // 2. Publish the task back to Kafka submission-tasks
-              await producer.send({
-                topic: 'submission-tasks',
-                messages: [{
-                  key: activeJobId,
-                  value: JSON.stringify({
-                    submissionId: submission.id,
-                    problemId: submission.problemId,
-                    code: submission.code,
-                    language: submission.language,
-                  })
-                }]
-              });
-              console.log(`[Worker Monitor] Successfully re-queued job ${activeJobId} back to Kafka.`);
-            } else {
-              console.warn(`[Worker Monitor] Submission ${activeJobId} not found in database. Skipping re-queue.`);
-            }
           } else {
             console.error(`[Worker Monitor] Submission ${activeJobId} crashed workers repeatedly (${currentRetries} times). Marking as failed.`);
 
