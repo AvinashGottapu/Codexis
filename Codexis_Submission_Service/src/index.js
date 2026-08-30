@@ -6,6 +6,7 @@ import { initKafkaSubscriber } from './services/kafkaSubscriber.js';
 import { initLeaderboardReconciler } from './services/leaderboardReconciler.js';
 import { connectKafka, initializeTopics } from './config/kafka.js';
 import { initWorkerMonitor } from './services/workerMonitor.js';
+import { initDlqConsumer } from './services/dlqConsumer.js';
 
 dotenv.config();
 
@@ -37,6 +38,9 @@ const start = async () => {
 
     // Start the Worker Failure Detection Daemon
     initWorkerMonitor();
+
+    // Start the Dead-Letter Queue (DLQ) Audit Consumer
+    await initDlqConsumer();
 
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
     console.log(`[Submission Service] Running on port ${PORT}`);

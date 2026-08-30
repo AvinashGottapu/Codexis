@@ -5,7 +5,7 @@ dotenv.config();
 
 const KAFKA_BROKERS = process.env.KAFKA_BROKERS || 'localhost:9092,localhost:9093';
 
-const kafka = new Kafka({
+export const kafka = new Kafka({
   clientId: 'submission-service',
   brokers: KAFKA_BROKERS.split(','),
   retry: {
@@ -36,6 +36,11 @@ export const initializeTopics = async () => {
         },
         {
           topic: 'submission-results',
+          numPartitions: 2,
+          replicationFactor: 2,
+        },
+        {
+          topic: 'submission-tasks-dlq',
           numPartitions: 2,
           replicationFactor: 2,
         },

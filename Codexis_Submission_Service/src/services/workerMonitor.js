@@ -45,7 +45,7 @@ export const checkWorkerHealth = async () => {
               data: { status: 'PENDING' },
             });
           } else {
-            console.error(`[Worker Monitor] Submission ${activeJobId} crashed workers repeatedly (${currentRetries} times). Marking as failed.`);
+            console.error(`[Worker Monitor] Submission ${activeJobId} crashed workers repeatedly (${uniqueCrashes} times). Marking as failed and routing to DLQ.`);
 
             // 1. Update database to RUNTIME_ERROR due to toxic loop
             await prisma.submission.update({
@@ -68,6 +68,34 @@ export const checkWorkerHealth = async () => {
                 })
               }]
             });
+
+            // 3. Route the poison pill submission payload to DLQ for admin analysis
+            try {
+              const submission = await prisma.submission.findUnique({
+                where: { id: activeJobId }
+              });
+
+              if (submission) {
+                await producer.send({
+                  topic: 'submission-tasks-dlq',
+                  messages: [{
+                    key: activeJobId,
+                    value: JSON.stringify({
+                      submissionId: submission.id,
+                      userId: submission.userId,
+                      problemId: submission.problemId,
+                      code: submission.code,
+                      language: submission.language,
+                      attempts: uniqueCrashes,
+                      crashedAt: new Date().toISOString(),
+                    })
+                  }]
+                });
+                console.log(`[Worker Monitor] Successfully routed crashed submission ${activeJobId} to DLQ topic.`);
+              }
+            } catch (dlqErr) {
+              console.error(`[Worker Monitor] Failed to route submission ${activeJobId} to DLQ:`, dlqErr.message || dlqErr);
+            }
             
             // Clean up the retry counter key
             await redisClient.del(retrySetKey);
