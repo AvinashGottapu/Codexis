@@ -1,21 +1,20 @@
 import { prisma } from '../config/db.js';
 import dotenv from 'dotenv';
 import { redisClient } from '../config/redis.js';
+import { problemAdminService } from '../config/services.js';
 
 dotenv.config();
-
-const PROBLEM_ADMIN_SERVICE_URL = process.env.PROBLEM_ADMIN_SERVICE_URL || 'http://localhost:3001';
 
 /**
  * Fetch problem details from the Problem Admin Service via REST API
  */
 export const fetchProblemDetails = async (problemId) => {
   try {
-    const res = await fetch(`${PROBLEM_ADMIN_SERVICE_URL}/api/problems/get/${problemId}`);
+    const res = await problemAdminService.fetch(`/api/problems/get/${problemId}`);
     if (!res.ok) return null;
     return await res.json();
   } catch (err) {
-    console.error(`[Submission Model] Failed to fetch problem details for ${problemId}:`, err);
+    console.error(`[Submission Model] Failed to fetch problem details for ${problemId}:`, err.message || err);
     return null;
   }
 };
